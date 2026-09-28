@@ -1,0 +1,128 @@
+[project]
+name = "juno"
+version = "0.1.0"
+description = "A minimal, headless agent harness for autonomous ML engineering and everyday coding: one long-running session with a real shell, crash-safe resume, background jobs, a SQLite trace and built-in ablation evals."
+license = "MIT"
+authors = [{ name = "Daniel Brai", email = "danielbrai.dev@gmail.com" }]
+keywords = ["agent", "harness", "llm", "machine-learning", "automation", "asyncio"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.15",
+
+    "Operating System :: POSIX :: Linux",
+
+    "Framework :: AsyncIO",
+
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+
+    "Typing :: Typed",
+]
+
+requires-python = ">=3.15"
+dependencies = [
+    "pydantic>=2.14.2",
+    "pydantic-settings>=2.16.2",
+]
+
+
+[dependency-groups]
+test = [
+    "anyio>=4.15.1",
+    "coverage>=7.17.0",
+    "hypothesis>=6.170.14",
+    "pytest>=9.2.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
+]
+lint = [
+    "git-changelog>=2.10.0",
+    "import-linter>=2.15",
+    "mypy==2.4.1",
+    "prek>=0.5.9",
+    "ruff==0.17.3",
+]
+
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
+
+
+[tool.uv]
+default-groups = ["test", "lint"]
+
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM", "RUF", "ASYNC", "PTH", "S", "TID"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ARG"]
+"src/juno/adapters/*sandbox.py" = ["S603", "S607"]
+"src/juno/config.py" = ["ARG003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["juno", "fakes"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+
+[tool.importlinter]
+root_package = "juno"
+
+[[tool.importlinter.contracts]]
+name = "Domain stays pure"
+type = "forbidden"
+source_modules = ["juno.domain"]
+forbidden_modules = ["juno.ports", "juno.config"]
+
+[[tool.importlinter.contracts]]
+name = "Ports do not depend on config"
+type = "forbidden"
+source_modules = ["juno.ports"]
+forbidden_modules = ["juno.config"]
+
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers -ra"
+testpaths = ["tests"]
+pythonpath = ["tests"]
+timeout = 60
+markers = [
+    "slow: long-running tests",
+    "gpu: needs an NVIDIA GPU, run with --gpu",
+    "live_api: calls the real model API, run with --live",
+    "e2e: end-to-end runs through the CLI",
+]
+
+
+[tool.coverage.run]
+source = ["juno"]
+branch = true
+parallel = true
+concurrency = ["thread", "multiprocessing"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
