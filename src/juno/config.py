@@ -1,0 +1,157 @@
+from collections.abc import Mapping
+from typing import Annotated, Any, ClassVar, Literal
+
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
+
+
+class Durations:
+    UNITS: ClassVar[Mapping[str, int]] = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+    @classmethod
+    def parse(cls, text: str) -> float:
+        total, amount, parts = 0.0, "", 0
+
+        for char in text.lower().replace(" ", ""):
+            if char.isdigit() or char == ".":
+                amount += char
+            elif char in cls.UNITS and amount:
+                total += float(amount) * cls.UNITS[char]
+                amount, parts = "", parts + 1
+            else:
+                raise cls._invalid(text)
+
+        if amount or not parts:
+            raise cls._invalid(text)
+
+        return total
+
+    @classmethod
+    def coerce(cls, value: object) -> object:
+        return cls.parse(value) if isinstance(value, str) else value
+
+    @staticmethod
+    def _invalid(text: str) -> ValueError:
+        return ValueError(f"invalid duration {text!r}, expected e.g. '90s', '10m', '1h30m'")
+
+
+type Seconds = Annotated[float, BeforeValidator(Durations.coerce), Field(gt=0)]
+
+
+class Section(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ToolFlags(Section):
+    system: bool = True
+    jobs: bool = True
+    submission: bool = True
+
+
+class NudgeFlags(Section):
+    time: bool = False
+    resource: bool = False
+
+
+class PromptFlags(Section):
+    strict_validation: bool = False
+
+
+class Flags(Section):
+    tools: ToolFlags = Field(default_factory=ToolFlags)
+    nudge: NudgeFlags = Field(default_factory=NudgeFlags)
+    prompt: PromptFlags = Field(default_factory=PromptFlags)
+    delegation: bool = False
+    parallel: bool = False
+    broadcast: bool = False
+    skills: bool = False
+    compaction: bool = False
+    network: bool = False
+    mcp_servers: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand_dotted_keys(cls, data: Any) -> Any:
+        return cls._nest(data) if isinstance(data, Mapping) else data
+
+    def with_overrides(self, overrides: Mapping[str, Any]) -> Flags:
+        return Flags.model_validate(self._merge(self.model_dump(), self._nest(overrides)))
+
+    @classmethod
+    def _nest(cls, data: Mapping[str, Any]) -> dict[str, Any]:
+        nested: dict[str, Any] = {}
+
+        for key, value in data.items():
+            *parents, leaf = key.split(".")
+            branch = {leaf: cls._nest(value) if isinstance(value, Mapping) else value}
+
+            for parent in reversed(parents):
+                branch = {parent: branch}
+
+            nested = cls._merge(nested, branch)
+
+        return nested
+
+    @classmethod
+    def _merge(cls, base: Mapping[str, Any], extra: Mapping[str, Any]) -> dict[str, Any]:
+        merged = dict(base)
+
+        for key, value in extra.items():
+            current = merged.get(key)
+
+            if isinstance(value, Mapping) and isinstance(current, Mapping):
+                merged[key] = cls._merge(current, value)
+            else:
+                merged[key] = value
+
+        return merged
+
+
+class ModelSettings(Section):
+    name: str = "claude-opus-5-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+
+
+class BudgetSettings(Section):
+    total: Seconds = 86_400
+    bash_timeout: Seconds = 600
+    max_jobs: int = Field(default=4, ge=1)
+
+
+class SandboxSettings(Section):
+    kind: Literal["podman", "local"] = "podman"
+    image: str | None = None
+    gpus: tuple[int, ...] = ()
+    memory: str | None = None
+    network: bool = False
+
+
+class HarnessConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="JUNO_",
+        env_nested_delimiter="__",
+        toml_file="juno.toml",
+        frozen=True,
+        extra="forbid",
+    )
+
+    model: ModelSettings = Field(default_factory=ModelSettings)
+    budget: BudgetSettings = Field(default_factory=BudgetSettings)
+    sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+    flags: Flags = Field(default_factory=Flags)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return init_settings, env_settings, TomlConfigSettingsSource(settings_cls)
