@@ -182,3 +182,31 @@ class ResourceSnapshot(Value):
     @property
     def ram_used_fraction(self) -> float:
         return self.ram_used_bytes / self.ram_total_bytes if self.ram_total_bytes else 0.0
+
+
+class Task(Value):
+    id: str
+    description: str
+    data_dir: Path
+    metric: str
+    direction: Direction
+    submission_file: str = "submission.csv"
+
+
+class RunPaths(Value):
+    root: Path
+
+    @property
+    def workspace(self) -> Path:
+        return self.root / "workspace"
+
+    @property
+    def logs(self) -> Path:
+        return self.root / "logs"
+
+    @property
+    def submissions(self) -> Path:
+        return self.root / "submissions"
+
+    def all(self) -> tuple[Path, ...]:
+        return self.workspace, self.logs, self.submissions

@@ -70,6 +70,17 @@ class TestDurations:
         with pytest.raises(ValidationError):
             BudgetSettings.model_validate({"total": value})
 
+    @pytest.mark.parametrize(
+        ("seconds", "text"),
+        [(0, "0s"), (-3, "0s"), (45, "45s"), (90, "1m 30s"), (5_400, "1h 30m"), (90_061, "1d 1h")],
+    )
+    def test_format_shows_the_two_largest_units(self, seconds: float, text: str) -> None:
+        assert Durations.format(seconds) == text
+
+    @pytest.mark.parametrize("text", ["45s", "1m30s", "1h30m", "2d"])
+    def test_format_round_trips_through_parse(self, text: str) -> None:
+        assert Durations.parse(Durations.format(Durations.parse(text))) == Durations.parse(text)
+
 
 class TestSources:
     def test_toml_file_is_read_with_dotted_flags(self, isolated: Path) -> None:

@@ -1,9 +1,12 @@
+from pathlib import Path
+
 import pytest
 
 from fakes.clock import FakeClock
 from fakes.probe import FakeProbe
 from juno.domain.session import Session
-from juno.domain.values import Message, ModelRequest, Role, ToolSpec
+from juno.domain.values import Direction, Message, ModelRequest, Role, RunPaths, Task, ToolSpec
+from juno.tools.workspace import Workspace
 
 GATED_MARKERS = {"live_api": "live", "gpu": "gpu"}
 
@@ -38,6 +41,36 @@ def probe() -> FakeProbe:
 @pytest.fixture
 def session(clock: FakeClock) -> Session:
     return Session(task_id="spooky", started_at=clock.now(), deadline=clock.now() + 3_600)
+
+
+@pytest.fixture
+def paths(tmp_path: Path) -> RunPaths:
+    run = RunPaths(root=tmp_path / "run")
+
+    for path in run.all():
+        path.mkdir(parents=True)
+
+    return run
+
+
+@pytest.fixture
+def workspace(paths: RunPaths) -> Workspace:
+    return Workspace(paths.workspace)
+
+
+@pytest.fixture
+def task(paths: RunPaths) -> Task:
+    data = paths.root / "data"
+    data.mkdir()
+    (data / "train.csv").write_text("id,text,author\n1,It was a dark night,EAP\n")
+
+    return Task(
+        id="spooky",
+        description="Predict the author of each sentence.",
+        data_dir=data,
+        metric="log_loss",
+        direction=Direction.MINIMIZE,
+    )
 
 
 @pytest.fixture

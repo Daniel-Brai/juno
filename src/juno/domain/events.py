@@ -63,4 +63,4 @@ class ResourcePressure(Event):
 class SessionEnded(Event):
     state: State
     usage: Usage
-    dropped_events: int = 0
+    handler_failures: int = 0

@@ -35,6 +35,19 @@ class Durations:
     def coerce(cls, value: object) -> object:
         return cls.parse(value) if isinstance(value, str) else value
 
+    @classmethod
+    def format(cls, seconds: float) -> str:
+        remaining = max(0, round(seconds))
+        parts: list[str] = []
+
+        for unit, size in sorted(cls.UNITS.items(), key=lambda item: item[1], reverse=True):
+            amount, remaining = divmod(remaining, size)
+
+            if amount:
+                parts.append(f"{amount}{unit}")
+
+        return " ".join(parts[:2]) or "0s"
+
     @staticmethod
     def _invalid(text: str) -> ValueError:
         return ValueError(f"invalid duration {text!r}, expected e.g. '90s', '10m', '1h30m'")

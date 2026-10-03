@@ -25,6 +25,7 @@ classifiers = [
 
 requires-python = ">=3.15"
 dependencies = [
+    "psutil>=7.2.2",
     "pydantic>=2.14.2",
     "pydantic-settings>=2.16.2",
 ]
@@ -45,6 +46,7 @@ lint = [
     "mypy==2.4.1",
     "prek>=0.5.9",
     "ruff==0.17.3",
+    "types-psutil>=7.2.2.20260906",
 ]
 
 
@@ -102,6 +104,12 @@ name = "Ports do not depend on config"
 type = "forbidden"
 source_modules = ["juno.ports"]
 forbidden_modules = ["juno.config"]
+
+[[tool.importlinter.contracts]]
+name = "Only bootstrap wires adapters"
+type = "forbidden"
+source_modules = ["juno.domain", "juno.ports", "juno.config", "juno.service", "juno.tools"]
+forbidden_modules = ["juno.adapters", "juno.bootstrap"]
 
 
 [tool.pytest.ini_options]
