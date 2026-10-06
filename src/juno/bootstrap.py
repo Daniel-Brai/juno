@@ -1,15 +1,20 @@
 from dataclasses import dataclass
+from types import TracebackType
+from typing import Any, Self
 
+from juno.adapters.git import GitCheckpointer
 from juno.adapters.local_sandbox import LocalSandbox
-from juno.adapters.memory import InMemorySubmissionRepo
+from juno.adapters.sqlite_store import SqliteStore
 from juno.adapters.system import PsutilProbe, SystemClock
 from juno.config import HarnessConfig
 from juno.domain.session import Session
-from juno.domain.values import RunPaths, Submission, Task
-from juno.ports import Clock, LlmClient, ResourceProbe, Sandbox, SubmissionRepo
+from juno.domain.values import Job, RunPaths, Submission, Task
+from juno.ports import Checkpointer, Clock, LlmClient, ResourceProbe, Sandbox
 from juno.service.bus import MessageBus
+from juno.service.journal import Journal, SetupChanged
 from juno.service.loop import AgentLoop
 from juno.service.prompts import Prompts
+from juno.service.recorders import CheckpointRecorder, EventRecorder
 from juno.tools.bash import BashTools
 from juno.tools.editor import EditorTools
 from juno.tools.jobs import JobTools
@@ -21,45 +26,128 @@ from juno.tools.workspace import Workspace
 
 
 @dataclass(frozen=True, slots=True)
+class Adapters:
+    llm: LlmClient
+    clock: Clock | None = None
+    probe: ResourceProbe | None = None
+    sandbox: Sandbox | None = None
+    checkpointer: Checkpointer | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Harness:
+    DATABASE = "run.db"
+
     session: Session
     loop: AgentLoop
     registry: ToolRegistry
     bus: MessageBus
+    store: SqliteStore
     jobs: JobTools | None
 
     @classmethod
-    def build(
-        cls,
-        *,
-        config: HarnessConfig,
-        task: Task,
-        paths: RunPaths,
-        llm: LlmClient,
-        clock: Clock | None = None,
-        probe: ResourceProbe | None = None,
-        sandbox: Sandbox | None = None,
-        submissions: SubmissionRepo | None = None,
-        session: Session | None = None,
+    async def start(
+        cls, *, config: HarnessConfig, task: Task, paths: RunPaths, adapters: Adapters
     ) -> Harness:
-        clock = clock or SystemClock()
-        submissions = submissions or InMemorySubmissionRepo()
-        sandbox = sandbox or cls._sandbox(config, paths)
+        clock = adapters.clock or SystemClock()
+        now = clock.now()
+        session = Session(
+            task_id=task.id,
+            started_at=now,
+            deadline=now + config.budget.total,
+            setup=cls.setup_of(config),
+        )
+        store = await cls.open_store(paths)
 
+        try:
+            async with store.unit_of_work() as uow:
+                existing = await uow.sessions.latest()
+
+            if existing is not None:
+                raise FileExistsError(
+                    f"{paths.root} already holds run {existing.id}; resume it or use a new folder"
+                )
+
+            return await cls._assemble(config, task, paths, adapters, clock, store, session, [])
+        except BaseException:
+            await store.close()
+            raise
+
+    @classmethod
+    async def resume(
+        cls, *, config: HarnessConfig, task: Task, paths: RunPaths, adapters: Adapters
+    ) -> Harness:
+        store = await cls.open_store(paths)
+
+        try:
+            async with store.unit_of_work() as uow:
+                session = await uow.sessions.latest()
+                jobs = await uow.jobs.all(session.id) if session is not None else []
+
+            if session is None:
+                raise FileNotFoundError(f"no run to resume in {paths.root}")
+
+            if changes := session.setup_changes(cls.setup_of(config)):
+                raise SetupChanged(changes)
+
+            harness = await cls._assemble(
+                config, task, paths, adapters, adapters.clock or SystemClock(), store, session, jobs
+            )
+            await harness.loop.journal.restore(session)
+            return harness
+        except BaseException:
+            await store.close()
+            raise
+
+    @classmethod
+    async def open_store(cls, paths: RunPaths) -> SqliteStore:
         for path in paths.all():
             path.mkdir(parents=True, exist_ok=True)
 
-        now = clock.now()
-        session = session or Session(
-            task_id=task.id, started_at=now, deadline=now + config.budget.total
-        )
+        return await SqliteStore.open(paths.root / cls.DATABASE)
+
+    @staticmethod
+    def setup_of(config: HarnessConfig) -> dict[str, Any]:
+        return config.model_dump(mode="json")
+
+    async def run(self) -> Submission | None:
+        return await self.loop.run(self.session)
+
+    async def close(self) -> None:
+        await self.store.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.close()
+
+    @classmethod
+    async def _assemble(
+        cls,
+        config: HarnessConfig,
+        task: Task,
+        paths: RunPaths,
+        adapters: Adapters,
+        clock: Clock,
+        store: SqliteStore,
+        session: Session,
+        stored_jobs: list[Job],
+    ) -> Harness:
+        units = store.unit_of_work
+        sandbox = adapters.sandbox or cls.sandbox_for(config, paths)
         workspace = Workspace(paths.workspace)
         bus = MessageBus()
         registry = ToolRegistry(
             middleware=[EmitEvents(bus, clock, session.id), ContainErrors(), TruncateOutput()]
         )
         registry.register(
-            BashTools(sandbox, clock, session.deadline, config.budget.bash_timeout),
+            BashTools(sandbox, clock, session, config.budget.bash_timeout),
             EditorTools(workspace),
         )
 
@@ -68,44 +156,32 @@ class Harness:
 
         if flags.jobs:
             jobs = JobTools(
-                sandbox, workspace, paths.logs, clock, session.deadline, config.budget.max_jobs
+                sandbox, units, session, paths.logs, clock, config.budget.max_jobs, stored_jobs
             )
             registry.register(jobs)
 
         if flags.system:
-            registry.register(
-                SystemTools(probe or PsutilProbe(), clock, session.started_at, session.deadline)
-            )
+            registry.register(SystemTools(adapters.probe or PsutilProbe(), clock, session))
 
         if flags.submission:
             registry.register(
                 SubmissionTools(
-                    submissions,
-                    workspace,
-                    paths.submissions,
-                    session.id,
-                    task.direction,
-                    clock,
-                    bus,
+                    units, workspace, paths.submissions, session.id, task.direction, clock, bus
                 )
             )
 
-        loop = AgentLoop(
-            llm=llm,
-            registry=registry,
-            clock=clock,
-            bus=bus,
-            prompts=Prompts(task, config.budget.total),
-            submissions=submissions,
-            jobs=jobs,
-        )
-        return cls(session=session, loop=loop, registry=registry, bus=bus, jobs=jobs)
+        prompts = Prompts(task, config.budget.total)
+        journal = Journal(units, registry, prompts, clock)
+        EventRecorder(units).attach(bus)
+        CheckpointRecorder(
+            adapters.checkpointer or GitCheckpointer(paths.workspace), units, bus, clock, session
+        ).attach()
 
-    async def run(self) -> Submission | None:
-        return await self.loop.run(self.session)
+        loop = AgentLoop(adapters.llm, journal, clock, bus, prompts, jobs)
+        return cls(session=session, loop=loop, registry=registry, bus=bus, store=store, jobs=jobs)
 
     @staticmethod
-    def _sandbox(config: HarnessConfig, paths: RunPaths) -> Sandbox:
+    def sandbox_for(config: HarnessConfig, paths: RunPaths) -> Sandbox:
         if config.sandbox.kind == "local":
             return LocalSandbox(paths.workspace)
 

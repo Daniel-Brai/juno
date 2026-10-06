@@ -7,7 +7,7 @@ from typing import Any
 from juno.domain.commands import ListSubmissions, RegisterSubmission
 from juno.domain.events import SubmissionRegistered
 from juno.domain.values import Direction, Submission
-from juno.ports import Clock, SubmissionRepo
+from juno.ports import Clock, UnitOfWorkFactory
 from juno.service.bus import MessageBus
 from juno.tools.registry import Tool, ToolError
 from juno.tools.workspace import Workspace
@@ -16,7 +16,7 @@ from juno.tools.workspace import Workspace
 class SubmissionTools:
     def __init__(
         self,
-        repo: SubmissionRepo,
+        units: UnitOfWorkFactory,
         workspace: Workspace,
         store_dir: Path,
         session_id: str,
@@ -24,7 +24,7 @@ class SubmissionTools:
         clock: Clock,
         bus: MessageBus,
     ) -> None:
-        self._repo = repo
+        self._units = units
         self._workspace = workspace
         self._store_dir = store_dir
         self._session_id = session_id
@@ -52,7 +52,7 @@ class SubmissionTools:
                 description="List registered submissions and their validation scores.",
                 input_model=ListSubmissions,
                 handler=self.list,
-                idempotent=True,
+                read_only=True,
             ),
         ]
 
@@ -63,18 +63,7 @@ class SubmissionTools:
             raise ToolError(f"{args.path} is not a file")
 
         digest = await asyncio.to_thread(self._sha256, source)
-        existing = [
-            item for item in await self._repo.all(self._session_id) if item.sha256 == digest
-        ]
-
-        if existing:
-            return (
-                f"{args.path} is already registered with validation score {existing[0].val_score}"
-            )
-
         target = self._store_dir / f"{digest}{source.suffix}"
-        await asyncio.to_thread(shutil.copy2, source, target)
-
         submission = Submission(
             path=target,
             sha256=digest,
@@ -83,21 +72,34 @@ class SubmissionTools:
             notes=args.notes,
             created_at=self._clock.now(),
         )
-        await self._repo.add(self._session_id, submission)
+
+        async with self._units() as uow:
+            submissions = await uow.submissions.all(self._session_id)
+            existing = [item for item in submissions if item.sha256 == digest]
+
+            if existing:
+                return f"{args.path} is already registered with validation score {existing[0].val_score}"
+
+            await asyncio.to_thread(shutil.copy2, source, target)
+            await uow.submissions.add(self._session_id, submission)
+            best = await uow.submissions.best(self._session_id)
+            await uow.commit()
+
         await self._bus.publish(
             SubmissionRegistered(
                 session_id=self._session_id, at=submission.created_at, submission=submission
             )
         )
-
-        count = len(await self._repo.all(self._session_id))
-        best = await self._repo.best(self._session_id)
         best_score = best.val_score if best is not None else args.val_score
-        return f"registered submission {count} with validation score {args.val_score}; best so far {best_score}"
+        return (
+            f"registered submission {len(submissions) + 1} with validation score "
+            f"{args.val_score}; best so far {best_score}"
+        )
 
     async def list(self, _: ListSubmissions) -> str:
-        submissions = await self._repo.all(self._session_id)
-        best = await self._repo.best(self._session_id)
+        async with self._units() as uow:
+            submissions = await uow.submissions.all(self._session_id)
+            best = await uow.submissions.best(self._session_id)
 
         if not submissions:
             return "no submissions yet"

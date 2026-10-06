@@ -7,6 +7,8 @@ from collections import deque
 from pathlib import Path
 from typing import ClassVar
 
+import psutil
+
 from juno.domain.values import CommandResult, Job
 
 
@@ -63,6 +65,7 @@ class LocalSandbox:
     KILL_GRACE_S: ClassVar[float] = 5.0
     DRAIN_TIMEOUT_S: ClassVar[float] = 5.0
     POLL_S: ClassVar[float] = 0.1
+    START_TOLERANCE_S: ClassVar[float] = 1.0
     READ_CHUNK: ClassVar[int] = 65_536
     JOB_WRAPPER: ClassVar[str] = 'eval "$1"; echo $? > "$2"'
 
@@ -126,6 +129,7 @@ class LocalSandbox:
             command=command,
             pid=process.pid,
             pgid=process.pid,
+            proc_start=self._start_time(process.pid),
             log_path=log_path,
             exit_path=exit_path,
         )
@@ -136,6 +140,16 @@ class LocalSandbox:
 
         process = self._jobs.get(job.pid)
         return process.returncode if process is not None else None
+
+    def is_alive(self, job: Job) -> bool:
+        if (process := self._jobs.get(job.pid)) is not None:
+            return process.returncode is None
+
+        start = self._start_time(job.pid)
+        same_process = job.proc_start is None or (
+            start is not None and abs(start - job.proc_start) < self.START_TOLERANCE_S
+        )
+        return start is not None and same_process
 
     async def kill_group(self, pgid: int) -> None:
         for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -164,6 +178,14 @@ class LocalSandbox:
                 await reader
         except TimeoutError:
             reader.cancel()
+
+    @staticmethod
+    def _start_time(pid: int) -> float | None:
+        try:
+            process = psutil.Process(pid)
+            return None if process.status() == psutil.STATUS_ZOMBIE else process.create_time()
+        except psutil.NoSuchProcess:
+            return None
 
     @staticmethod
     def _signal(pgid: int, sig: int) -> bool:

@@ -24,7 +24,7 @@ class Reply:
     @staticmethod
     def tools(*calls: tuple[str, dict[str, Any]], usage: Usage | None = None) -> ModelReply:
         content: list[ContentBlock] = [
-            {"type": "tool_use", "id": f"toolu_{uuid7().hex[:12]}", "name": name, "input": args}
+            {"type": "tool_use", "id": f"toolu_{uuid7().hex}", "name": name, "input": args}
             for name, args in calls
         ]
         return ModelReply(content=content, stop_reason=StopReason.TOOL_USE, usage=usage or Usage())

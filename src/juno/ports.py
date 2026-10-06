@@ -1,17 +1,22 @@
+from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol, Self
 
+from juno.domain.events import Event
+from juno.domain.session import Session
 from juno.domain.values import (
+    Checkpoint,
     CommandResult,
     Job,
-    Message,
+    MessageRecord,
     ModelReply,
     ModelRequest,
     ResourceSnapshot,
     Submission,
     ToolCall,
     ToolCallRecord,
+    ToolCallStatus,
     ToolResult,
 )
 
@@ -37,35 +42,43 @@ class Sandbox(Protocol):
 
     def poll(self, job: Job) -> int | None: ...
 
+    def is_alive(self, job: Job) -> bool: ...
+
     async def kill_group(self, pgid: int) -> None: ...
 
 
 class Checkpointer(Protocol):
-    async def checkpoint(self, message: str) -> str: ...
+    async def checkpoint(self, message: str) -> str | None: ...
+
+
+class SessionRepo(Protocol):
+    async def save(self, session: Session) -> None: ...
+
+    async def get(self, session_id: str) -> Session | None: ...
+
+    async def latest(self) -> Session | None: ...
 
 
 class MessageRepo(Protocol):
-    async def append(
-        self, session_id: str, index: int, message: Message, request_hash: str | None = None
-    ) -> None: ...
+    async def append(self, session_id: str, record: MessageRecord) -> None: ...
 
-    async def all(self, session_id: str) -> list[Message]: ...
+    async def all(self, session_id: str) -> list[MessageRecord]: ...
 
 
 class ToolCallRepo(Protocol):
     async def record_intent(self, session_id: str, call: ToolCall) -> None: ...
 
-    async def record_result(self, session_id: str, result: ToolResult) -> None: ...
+    async def record_result(
+        self, session_id: str, result: ToolResult, status: ToolCallStatus = ToolCallStatus.DONE
+    ) -> None: ...
 
     async def find(self, session_id: str, call_id: str) -> ToolCallRecord | None: ...
 
 
 class JobRepo(Protocol):
-    async def add(self, session_id: str, job: Job) -> None: ...
+    async def save(self, session_id: str, job: Job) -> None: ...
 
-    async def update(self, job: Job) -> None: ...
-
-    async def running(self, session_id: str) -> list[Job]: ...
+    async def all(self, session_id: str) -> list[Job]: ...
 
 
 class SubmissionRepo(Protocol):
@@ -76,7 +89,22 @@ class SubmissionRepo(Protocol):
     async def best(self, session_id: str) -> Submission | None: ...
 
 
+class CheckpointRepo(Protocol):
+    async def add(self, session_id: str, checkpoint: Checkpoint) -> None: ...
+
+    async def all(self, session_id: str) -> list[Checkpoint]: ...
+
+
+class EventRepo(Protocol):
+    async def add(self, event: Event) -> None: ...
+
+    async def count(self, session_id: str) -> int: ...
+
+
 class UnitOfWork(Protocol):
+    @property
+    def sessions(self) -> SessionRepo: ...
+
     @property
     def messages(self) -> MessageRepo: ...
 
@@ -88,6 +116,12 @@ class UnitOfWork(Protocol):
 
     @property
     def submissions(self) -> SubmissionRepo: ...
+
+    @property
+    def checkpoints(self) -> CheckpointRepo: ...
+
+    @property
+    def events(self) -> EventRepo: ...
 
     async def __aenter__(self) -> Self: ...
 
@@ -101,3 +135,6 @@ class UnitOfWork(Protocol):
     async def commit(self) -> None: ...
 
     async def rollback(self) -> None: ...
+
+
+type UnitOfWorkFactory = Callable[[], UnitOfWork]

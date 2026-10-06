@@ -1,5 +1,6 @@
 from juno.config import Durations
 from juno.domain.commands import QuerySystem
+from juno.domain.session import Session
 from juno.ports import Clock, ResourceProbe
 from juno.tools.registry import Tool
 
@@ -7,13 +8,10 @@ GIB = 1024**3
 
 
 class SystemTools:
-    def __init__(
-        self, probe: ResourceProbe, clock: Clock, started_at: float, deadline: float
-    ) -> None:
+    def __init__(self, probe: ResourceProbe, clock: Clock, session: Session) -> None:
         self._probe = probe
         self._clock = clock
-        self._started_at = started_at
-        self._deadline = deadline
+        self._session = session
 
     def tools(self) -> list[Tool[QuerySystem]]:
         return [
@@ -22,7 +20,7 @@ class SystemTools:
                 description="Show CPU, RAM and GPU use, plus elapsed and remaining time.",
                 input_model=QuerySystem,
                 handler=self.run,
-                idempotent=True,
+                read_only=True,
             )
         ]
 
@@ -40,7 +38,7 @@ class SystemTools:
             for gpu in snapshot.gpus
         ] or ["GPU: none detected"]
         lines += [
-            f"Elapsed: {Durations.format(now - self._started_at)}",
-            f"Remaining: {Durations.format(self._deadline - now)}",
+            f"Elapsed: {Durations.format(self._session.elapsed(now))}",
+            f"Remaining: {Durations.format(self._session.remaining(now))}",
         ]
         return "\n".join(lines)

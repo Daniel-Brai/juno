@@ -25,6 +25,7 @@ class Tool[C: Command]:
     input_model: type[C]
     handler: Callable[[C], Awaitable[str]]
     idempotent: bool = False
+    read_only: bool = False
 
     @property
     def spec(self) -> ToolSpec:
@@ -62,6 +63,7 @@ class Toolset(Protocol):
 class ToolRegistry:
     def __init__(self, middleware: Sequence[Middleware] = ()) -> None:
         self._tools: dict[str, Tool[Any]] = {}
+        self._specs: list[ToolSpec] = []
         self._dispatch: Dispatch = self._run
 
         for layer in reversed(middleware):
@@ -74,17 +76,22 @@ class ToolRegistry:
                     raise ValueError(f"tool {tool.name!r} is already registered")
 
                 self._tools[tool.name] = tool
+                self._specs.append(tool.spec)
 
     @property
     def names(self) -> list[str]:
         return list(self._tools)
 
     def specs(self) -> list[ToolSpec]:
-        return [tool.spec for tool in self._tools.values()]
+        return list(self._specs)
 
     def is_idempotent(self, name: str) -> bool:
         tool = self._tools.get(name)
-        return tool is not None and tool.idempotent
+        return tool is not None and (tool.idempotent or tool.read_only)
+
+    def is_read_only(self, name: str) -> bool:
+        tool = self._tools.get(name)
+        return tool is not None and tool.read_only
 
     async def dispatch(self, call: ToolCall) -> ToolResult:
         return await self._dispatch(call)

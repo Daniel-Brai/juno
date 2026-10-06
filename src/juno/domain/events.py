@@ -60,6 +60,13 @@ class ResourcePressure(Event):
     reason: str
 
 
+class SessionResumed(Event):
+    downtime_s: float
+    jobs_busy_s: float
+    paused_s: float
+    deadline: float
+
+
 class SessionEnded(Event):
     state: State
     usage: Usage

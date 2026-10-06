@@ -107,10 +107,11 @@ class ModelReply(Value):
         return [ToolCall.from_block(block) for block in self.content if block["type"] == "tool_use"]
 
 
-class ModelStep(Value):
-    message_index: int
-    request_hash: str
-    reply: ModelReply
+class MessageRecord(Value):
+    index: int
+    message: Message
+    request_hash: str | None = None
+    usage: Usage | None = None
 
 
 class JobState(StrEnum):
@@ -123,9 +124,12 @@ class JobState(StrEnum):
 
 class Job(Value):
     id: str = Field(default_factory=lambda: uuid7().hex)
+    name: str = ""
     command: str
     pid: int
     pgid: int
+    proc_start: float | None = None
+    started_at: float = 0.0
     log_path: Path
     exit_path: Path
     state: JobState = JobState.RUNNING

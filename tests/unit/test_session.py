@@ -104,3 +104,67 @@ class TestHistory:
 
         with pytest.raises(InvalidHistory):
             session.append_tool_results([ToolResult(call_id="toolu_x", content="x")])
+
+
+class TestBudget:
+    def test_elapsed_leaves_out_paused_time(self, session: Session) -> None:
+        session.paused_s = 600
+
+        assert session.elapsed(session.started_at + 1_800) == 1_200
+
+    def test_downtime_moves_the_deadline(self, session: Session) -> None:
+        deadline = session.deadline
+        session.touch(session.started_at + 100)
+
+        downtime = session.pause_for_downtime(session.started_at + 400)
+
+        assert downtime == 300
+        assert (session.deadline, session.paused_s) == (deadline + 300, 300)
+        assert session.last_active_at == session.started_at + 400
+
+    @pytest.mark.parametrize("state", [State.DONE, State.FAILED])
+    def test_finished_sessions_are_not_paused(self, session: Session, state: State) -> None:
+        session.touch(session.started_at)
+        session.state = state
+
+        assert session.pause_for_downtime(session.started_at + 900) == 0
+        assert session.paused_s == 0
+
+    def test_a_session_never_saved_has_no_downtime(self, session: Session) -> None:
+        assert session.pause_for_downtime(session.started_at + 900) == 0
+
+
+class TestSetup:
+    def test_changes_are_reported_as_dotted_keys(self, session: Session) -> None:
+        session.setup = {
+            "model": {"name": "a", "effort": "high"},
+            "flags": {"tools": {"jobs": True}},
+        }
+
+        changes = session.setup_changes(
+            {"model": {"name": "b", "effort": "high"}, "flags": {"tools": {"jobs": True, "new": 1}}}
+        )
+
+        assert changes == ["flags.tools.new", "model.name"]
+
+    def test_the_same_setup_has_no_changes(self, session: Session) -> None:
+        session.setup = {"model": {"name": "a"}}
+
+        assert session.setup_changes({"model": {"name": "a"}}) == []
+
+
+class TestBusyDowntime:
+    def test_only_idle_downtime_is_paused(self, session: Session) -> None:
+        deadline = session.deadline
+        session.touch(session.started_at)
+
+        paused = session.pause_for_downtime(session.started_at + 300, busy_s=100)
+
+        assert paused == 200
+        assert (session.deadline, session.paused_s) == (deadline + 200, 200)
+
+    def test_downtime_spent_by_jobs_is_not_paused(self, session: Session) -> None:
+        session.touch(session.started_at)
+
+        assert session.pause_for_downtime(session.started_at + 300, busy_s=900) == 0
+        assert session.paused_s == 0

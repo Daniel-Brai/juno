@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar
+from typing import Any, ClassVar
 from uuid import uuid7
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -61,6 +61,9 @@ class Session(BaseModel):
     started_at: float
     deadline: float
     state: State = State.STARTING
+    last_active_at: float | None = None
+    paused_s: float = 0.0
+    setup: dict[str, Any] = Field(default_factory=dict)
     messages: list[Message] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
 
@@ -70,6 +73,47 @@ class Session(BaseModel):
 
     def remaining(self, now: float) -> float:
         return max(0.0, self.deadline - now)
+
+    def elapsed(self, now: float) -> float:
+        return max(0.0, now - self.started_at - self.paused_s)
+
+    def touch(self, now: float) -> None:
+        self.last_active_at = now
+
+    def downtime(self, now: float) -> float:
+        if self.terminal or self.last_active_at is None:
+            return 0.0
+
+        return max(0.0, now - self.last_active_at)
+
+    def pause_for_downtime(self, now: float, busy_s: float = 0.0) -> float:
+        pause = max(0.0, self.downtime(now) - busy_s)
+        self.deadline += pause
+        self.paused_s += pause
+
+        if not self.terminal:
+            self.last_active_at = now
+
+        return pause
+
+    def setup_changes(self, setup: Mapping[str, Any]) -> list[str]:
+        return sorted(self._differences(self.setup, setup))
+
+    @classmethod
+    def _differences(
+        cls, old: Mapping[str, Any], new: Mapping[str, Any], prefix: str = ""
+    ) -> set[str]:
+        changed: set[str] = set()
+
+        for key in old.keys() | new.keys():
+            before, after = old.get(key), new.get(key)
+
+            if isinstance(before, Mapping) and isinstance(after, Mapping):
+                changed |= cls._differences(before, after, f"{prefix}{key}.")
+            elif before != after:
+                changed.add(f"{prefix}{key}")
+
+        return changed
 
     def fire(self, trigger: Trigger) -> State:
         if self.terminal:

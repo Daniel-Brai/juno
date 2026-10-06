@@ -1,11 +1,15 @@
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
 from fakes.clock import FakeClock
 from fakes.probe import FakeProbe
+from fakes.run import RunFactory
+from juno.adapters.sqlite_store import SqliteStore
 from juno.domain.session import Session
 from juno.domain.values import Direction, Message, ModelRequest, Role, RunPaths, Task, ToolSpec
+from juno.ports import UnitOfWorkFactory
 from juno.tools.workspace import Workspace
 
 GATED_MARKERS = {"live_api": "live", "gpu": "gpu"}
@@ -54,6 +58,22 @@ def paths(tmp_path: Path) -> RunPaths:
 
 
 @pytest.fixture
+async def store(paths: RunPaths) -> AsyncIterator[SqliteStore]:
+    store = await SqliteStore.open(paths.root / "run.db")
+    yield store
+    await store.close()
+
+
+@pytest.fixture
+async def units(store: SqliteStore, session: Session) -> UnitOfWorkFactory:
+    async with store.unit_of_work() as uow:
+        await uow.sessions.save(session)
+        await uow.commit()
+
+    return store.unit_of_work
+
+
+@pytest.fixture
 def workspace(paths: RunPaths) -> Workspace:
     return Workspace(paths.workspace)
 
@@ -80,3 +100,12 @@ def model_request() -> ModelRequest:
         tools=[ToolSpec(name="bash", description="Run a command", input_schema={"type": "object"})],
         messages=[Message(role=Role.USER, content="Solve the task.")],
     )
+
+
+@pytest.fixture
+async def runs(
+    task: Task, paths: RunPaths, clock: FakeClock, probe: FakeProbe
+) -> AsyncIterator[RunFactory]:
+    factory = RunFactory(task, paths, clock, probe)
+    yield factory
+    await factory.close_all()

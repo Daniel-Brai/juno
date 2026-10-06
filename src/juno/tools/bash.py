@@ -1,16 +1,17 @@
 from juno.config import Durations
 from juno.domain.commands import RunBash
+from juno.domain.session import Session
 from juno.ports import Clock, Sandbox
 from juno.tools.registry import Tool, ToolError
 
 
 class BashTools:
     def __init__(
-        self, sandbox: Sandbox, clock: Clock, deadline: float, max_timeout_s: float
+        self, sandbox: Sandbox, clock: Clock, session: Session, max_timeout_s: float
     ) -> None:
         self._sandbox = sandbox
         self._clock = clock
-        self._deadline = deadline
+        self._session = session
         self._max_timeout_s = max_timeout_s
 
     def tools(self) -> list[Tool[RunBash]]:
@@ -28,7 +29,7 @@ class BashTools:
         ]
 
     async def run(self, args: RunBash) -> str:
-        remaining = self._deadline - self._clock.now()
+        remaining = self._session.remaining(self._clock.now())
 
         if remaining <= 0:
             raise ToolError("the time budget is spent")

@@ -1,7 +1,7 @@
 [project]
 name = "juno"
 version = "0.1.0"
-description = "A minimal, headless agent harness for autonomous ML engineering and everyday coding: one long-running session with a real shell, crash-safe resume, background jobs, a SQLite trace and built-in ablation evals."
+description = "Your headless agent harness for long-running tasks and everyday coding. Give it a goal, walk away, and come back to finished work."
 license = "MIT"
 authors = [{ name = "Daniel Brai", email = "danielbrai.dev@gmail.com" }]
 keywords = ["agent", "harness", "llm", "machine-learning", "automation", "asyncio"]
@@ -25,6 +25,7 @@ classifiers = [
 
 requires-python = ">=3.15"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "psutil>=7.2.2",
     "pydantic>=2.14.2",
     "pydantic-settings>=2.16.2",
@@ -68,8 +69,9 @@ select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM", "RUF", "ASYNC", "PT
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "ARG"]
+"tests/**" = ["S101", "ARG", "S603", "S607"]
 "src/juno/adapters/*sandbox.py" = ["S603", "S607"]
+"src/juno/adapters/git.py" = ["S603", "S607"]
 "src/juno/config.py" = ["ARG003"]
 
 [tool.ruff.lint.isort]
