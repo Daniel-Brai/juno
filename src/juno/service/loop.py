@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from juno.domain.events import (
     ModelCalled,
@@ -9,7 +9,7 @@ from juno.domain.events import (
     TurnContinued,
 )
 from juno.domain.session import Session, State, Trigger
-from juno.domain.values import StopReason, Submission, ToolCall
+from juno.domain.values import StopReason, Submission, ToolCall, ToolResult
 from juno.ports import Clock, LlmClient
 from juno.service.bus import MessageBus
 from juno.service.journal import Journal
@@ -23,6 +23,11 @@ class Jobs(Protocol):
 
 
 class AgentLoop:
+    CUT_OFF: ClassVar[str] = (
+        "this tool call was cut off by the output limit and did not run; "
+        "resend it with less content per call"
+    )
+
     def __init__(
         self,
         llm: LlmClient,
@@ -133,10 +138,17 @@ class AgentLoop:
             )
         )
 
-        if calls:
+        if calls and reply.stop_reason is StopReason.MAX_TOKENS:
+            session.append_tool_results([self.cut_off(call) for call in calls])
+            await self.journal.save(session)
+        elif calls:
             await self._finish_tools(session, calls)
         elif session.state is State.AWAITING_CONTINUE:
             await self._continue(session)
+
+    @classmethod
+    def cut_off(cls, call: ToolCall) -> ToolResult:
+        return ToolResult(call_id=call.id, content=cls.CUT_OFF, is_error=True)
 
     async def _finish_tools(self, session: Session, calls: Sequence[ToolCall]) -> None:
         session.append_tool_results(await self.journal.run_tools(session.id, calls))

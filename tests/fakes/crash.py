@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fakes.probe import FakeProbe
-from juno.adapters.local_sandbox import LocalSandbox
+from juno.adapters.sandboxes.local import LocalSandbox
 from juno.domain.values import CommandResult, ResourceSnapshot
 
 

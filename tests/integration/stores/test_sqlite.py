@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from juno.adapters.sqlite_store import SqliteStore
+from juno.adapters.stores.sqlite import SqliteStore
 from juno.domain.events import TurnContinued
 from juno.domain.session import Session, State
 from juno.domain.values import (

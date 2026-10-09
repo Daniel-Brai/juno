@@ -48,6 +48,9 @@ class ScriptedLlm:
         self._faults[request_index] = error
         return self
 
+    async def close(self) -> None:
+        return None
+
     async def complete(self, request: ModelRequest) -> ModelReply:
         index = len(self.requests)
         self.requests.append(request)

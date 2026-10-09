@@ -76,3 +76,14 @@ class TestFakeProbe:
 
         assert probe.sample().ram_used_fraction == pytest.approx(0.97, abs=1e-6)
         assert probe.samples == 1
+
+
+class TestSystemProbe:
+    def test_reports_memory_and_no_gpus_without_a_driver(self) -> None:
+        from juno.adapters.system import SystemProbe
+
+        probe = SystemProbe()
+        snapshot = probe.sample()
+
+        assert snapshot.ram_total_bytes > 0
+        assert probe.has_gpus or snapshot.gpus == ()

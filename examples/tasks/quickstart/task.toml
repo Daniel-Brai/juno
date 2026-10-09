@@ -1,0 +1,4 @@
+id = "quickstart"
+metric = "accuracy"
+direction = "maximize"
+submission = "submission.csv"

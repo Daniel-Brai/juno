@@ -55,6 +55,11 @@ class Compacted(Event):
     message_index: int
 
 
+class CacheMissed(Event):
+    message_index: int
+    misses: int
+
+
 class ResourcePressure(Event):
     snapshot: ResourceSnapshot
     reason: str

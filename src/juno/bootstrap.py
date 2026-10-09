@@ -1,20 +1,27 @@
+import asyncio
+import contextlib
+import os
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self
 
 from juno.adapters.git import GitCheckpointer
-from juno.adapters.local_sandbox import LocalSandbox
-from juno.adapters.sqlite_store import SqliteStore
-from juno.adapters.system import PsutilProbe, SystemClock
+from juno.adapters.llm.anthropic import AnthropicClient
+from juno.adapters.llm.openrouter import OpenRouterClient
+from juno.adapters.sandboxes.local import LocalSandbox
+from juno.adapters.sandboxes.podman import PodmanSandbox
+from juno.adapters.stores.sqlite import SqliteStore
+from juno.adapters.system import SystemClock, SystemProbe
 from juno.config import HarnessConfig
 from juno.domain.session import Session
-from juno.domain.values import Job, RunPaths, Submission, Task
+from juno.domain.values import Job, RunPaths, Submission, Task, Usage
 from juno.ports import Checkpointer, Clock, LlmClient, ResourceProbe, Sandbox
 from juno.service.bus import MessageBus
 from juno.service.journal import Journal, SetupChanged
 from juno.service.loop import AgentLoop
 from juno.service.prompts import Prompts
-from juno.service.recorders import CheckpointRecorder, EventRecorder
+from juno.service.recorders import CacheMonitor, CheckpointRecorder, EventRecorder, LogRecorder
+from juno.service.watchdog import MemoryWatchdog
 from juno.tools.bash import BashTools
 from juno.tools.editor import EditorTools
 from juno.tools.jobs import JobTools
@@ -27,11 +34,20 @@ from juno.tools.workspace import Workspace
 
 @dataclass(frozen=True, slots=True)
 class Adapters:
-    llm: LlmClient
+    llm: LlmClient | None = None
     clock: Clock | None = None
     probe: ResourceProbe | None = None
     sandbox: Sandbox | None = None
     checkpointer: Checkpointer | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunReport:
+    session: Session
+    best: Submission | None
+    jobs: list[Job]
+    checkpoints: int
+    usage: Usage
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +59,9 @@ class Harness:
     registry: ToolRegistry
     bus: MessageBus
     store: SqliteStore
+    sandbox: Sandbox
+    llm: LlmClient
+    watchdog: MemoryWatchdog
     jobs: JobTools | None
 
     @classmethod
@@ -106,14 +125,89 @@ class Harness:
 
         return await SqliteStore.open(paths.root / cls.DATABASE)
 
+    @classmethod
+    async def report(cls, paths: RunPaths) -> RunReport:
+        if not (paths.root / cls.DATABASE).is_file():
+            raise FileNotFoundError(f"{paths.root} is not a juno run folder")
+
+        store = await SqliteStore.open(paths.root / cls.DATABASE)
+
+        try:
+            async with store.unit_of_work() as uow:
+                session = await uow.sessions.latest()
+
+                if session is None:
+                    raise FileNotFoundError(f"no run in {paths.root}")
+
+                records = await uow.messages.all(session.id)
+                return RunReport(
+                    session=session,
+                    best=await uow.submissions.best(session.id),
+                    jobs=await uow.jobs.all(session.id),
+                    checkpoints=len(await uow.checkpoints.all(session.id)),
+                    usage=sum((r.usage for r in records if r.usage is not None), Usage()),
+                )
+        finally:
+            await store.close()
+
     @staticmethod
     def setup_of(config: HarnessConfig) -> dict[str, Any]:
         return config.model_dump(mode="json")
 
+    @staticmethod
+    def llm_for(config: HarnessConfig, session: Session) -> LlmClient:
+        model = config.model
+
+        if model.provider == "openrouter":
+            key = os.environ.get("OPENROUTER_API_KEY")
+
+            if not key:
+                raise RuntimeError("set OPENROUTER_API_KEY to use the openrouter provider")
+
+            return OpenRouterClient(
+                key, model.name, model.effort, model.max_tokens, session_id=session.id
+            )
+
+        return AnthropicClient(
+            model.name, model.effort, model.max_tokens, compaction=config.flags.compaction
+        )
+
+    @staticmethod
+    def sandbox_for(
+        config: HarnessConfig, paths: RunPaths, task: Task, session: Session
+    ) -> Sandbox:
+        if config.sandbox.kind == "local":
+            return LocalSandbox(paths.workspace)
+
+        return PodmanSandbox(
+            name=f"juno-{session.id[-12:]}",
+            image=config.sandbox.image,
+            workspace=paths.workspace,
+            logs=paths.logs,
+            data=task.data_dir,
+            memory=config.sandbox.memory,
+            gpus=config.sandbox.gpus,
+            network=config.sandbox.network,
+        )
+
     async def run(self) -> Submission | None:
-        return await self.loop.run(self.session)
+        watcher = asyncio.create_task(self.watchdog.watch())
+
+        try:
+            best = await self.loop.run(self.session)
+        finally:
+            watcher.cancel()
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+
+        if self.session.terminal:
+            await self.sandbox.stop()
+
+        return best
 
     async def close(self) -> None:
+        await self.llm.close()
         await self.store.close()
 
     async def __aenter__(self) -> Self:
@@ -140,7 +234,10 @@ class Harness:
         stored_jobs: list[Job],
     ) -> Harness:
         units = store.unit_of_work
-        sandbox = adapters.sandbox or cls.sandbox_for(config, paths)
+        sandbox = adapters.sandbox or cls.sandbox_for(config, paths, task, session)
+        await sandbox.start()
+
+        probe = adapters.probe or SystemProbe()
         workspace = Workspace(paths.workspace)
         bus = MessageBus()
         registry = ToolRegistry(
@@ -161,7 +258,7 @@ class Harness:
             registry.register(jobs)
 
         if flags.system:
-            registry.register(SystemTools(adapters.probe or PsutilProbe(), clock, session))
+            registry.register(SystemTools(probe, clock, session))
 
         if flags.submission:
             registry.register(
@@ -170,21 +267,39 @@ class Harness:
                 )
             )
 
-        prompts = Prompts(task, config.budget.total)
+        seen_task = (
+            task.model_copy(update={"data_dir": PodmanSandbox.DATA})
+            if isinstance(sandbox, PodmanSandbox)
+            else task
+        )
+        prompts = Prompts(seen_task, config.budget.total)
         journal = Journal(units, registry, prompts, clock)
         EventRecorder(units).attach(bus)
+        LogRecorder().attach(bus)
+        CacheMonitor(bus, clock).attach()
         CheckpointRecorder(
             adapters.checkpointer or GitCheckpointer(paths.workspace), units, bus, clock, session
         ).attach()
 
-        loop = AgentLoop(adapters.llm, journal, clock, bus, prompts, jobs)
-        return cls(session=session, loop=loop, registry=registry, bus=bus, store=store, jobs=jobs)
-
-    @staticmethod
-    def sandbox_for(config: HarnessConfig, paths: RunPaths) -> Sandbox:
-        if config.sandbox.kind == "local":
-            return LocalSandbox(paths.workspace)
-
-        raise NotImplementedError(
-            "the podman sandbox arrives in phase 3; set sandbox.kind = 'local'"
+        llm = adapters.llm or cls.llm_for(config, session)
+        watchdog = MemoryWatchdog(
+            probe,
+            jobs,
+            bus,
+            clock,
+            session.id,
+            config.watchdog.memory_fraction,
+            config.watchdog.interval,
+        )
+        loop = AgentLoop(llm, journal, clock, bus, prompts, jobs)
+        return cls(
+            session=session,
+            loop=loop,
+            registry=registry,
+            bus=bus,
+            store=store,
+            sandbox=sandbox,
+            llm=llm,
+            watchdog=watchdog,
+            jobs=jobs,
         )

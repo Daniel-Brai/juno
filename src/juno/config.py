@@ -126,8 +126,10 @@ class Flags(Section):
 
 
 class ModelSettings(Section):
+    provider: Literal["anthropic", "openrouter"] = "anthropic"
     name: str = "claude-opus-5-5"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    max_tokens: int = Field(default=64_000, ge=1_024)
 
 
 class BudgetSettings(Section):
@@ -138,10 +140,15 @@ class BudgetSettings(Section):
 
 class SandboxSettings(Section):
     kind: Literal["podman", "local"] = "podman"
-    image: str | None = None
+    image: str = "docker.io/library/python:3.13-slim"
     gpus: tuple[int, ...] = ()
     memory: str | None = None
     network: bool = False
+
+
+class WatchdogSettings(Section):
+    memory_fraction: float = Field(default=0.95, gt=0, le=1)
+    interval: Seconds = 5
 
 
 class HarnessConfig(BaseSettings):
@@ -156,6 +163,7 @@ class HarnessConfig(BaseSettings):
     model: ModelSettings = Field(default_factory=ModelSettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+    watchdog: WatchdogSettings = Field(default_factory=WatchdogSettings)
     flags: Flags = Field(default_factory=Flags)
 
     @classmethod

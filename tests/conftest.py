@@ -6,7 +6,7 @@ import pytest
 from fakes.clock import FakeClock
 from fakes.probe import FakeProbe
 from fakes.run import RunFactory
-from juno.adapters.sqlite_store import SqliteStore
+from juno.adapters.stores.sqlite import SqliteStore
 from juno.domain.session import Session
 from juno.domain.values import Direction, Message, ModelRequest, Role, RunPaths, Task, ToolSpec
 from juno.ports import UnitOfWorkFactory

@@ -7,7 +7,7 @@ import pytest
 from fakes.clock import FakeClock
 from fakes.probe import FakeProbe
 from fakes.sandbox import StillAliveSandbox
-from juno.adapters.local_sandbox import LocalSandbox
+from juno.adapters.sandboxes.local import LocalSandbox
 from juno.domain.commands import (
     CancelJob,
     InspectJob,

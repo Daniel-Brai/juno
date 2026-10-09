@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from juno.adapters.local_sandbox import LocalSandbox
+from juno.adapters.sandboxes.local import LocalSandbox
 from juno.domain.values import RunPaths
 
 pytestmark = pytest.mark.anyio

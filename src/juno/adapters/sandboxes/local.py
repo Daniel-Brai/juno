@@ -6,6 +6,7 @@ from asyncio.subprocess import DEVNULL, PIPE, STDOUT, Process
 from collections import deque
 from pathlib import Path
 from typing import ClassVar
+from uuid import uuid7
 
 import psutil
 
@@ -67,7 +68,7 @@ class LocalSandbox:
     POLL_S: ClassVar[float] = 0.1
     START_TOLERANCE_S: ClassVar[float] = 1.0
     READ_CHUNK: ClassVar[int] = 65_536
-    JOB_WRAPPER: ClassVar[str] = 'eval "$1"; echo $? > "$2"'
+    JOB_WRAPPER: ClassVar[str] = '( eval "$1" ); echo $? > "$2"'
 
     def __init__(self, workspace: Path, output_limit: int = 30_000) -> None:
         self._workspace = workspace
@@ -76,10 +77,9 @@ class LocalSandbox:
 
     async def exec(self, command: str, timeout_s: float) -> CommandResult:
         started = time.monotonic()
+        token = uuid7().hex
         process = await asyncio.create_subprocess_exec(
-            "bash",
-            "-c",
-            command,
+            *self.exec_argv(command, token),
             cwd=self._workspace,
             stdin=DEVNULL,
             stdout=PIPE,
@@ -96,7 +96,7 @@ class LocalSandbox:
         except TimeoutError:
             timed_out = True
         finally:
-            await self.kill_group(process.pid)
+            await self.stop_exec(process, token)
             await process.wait()
             await self._finish_reading(reader)
 
@@ -107,6 +107,20 @@ class LocalSandbox:
             timed_out=timed_out,
             duration_s=time.monotonic() - started,
         )
+
+    async def start(self) -> None:
+        self._workspace.mkdir(parents=True, exist_ok=True)
+
+    async def stop(self) -> None:
+        for process in list(self._jobs.values()):
+            if process.returncode is None:
+                await self.kill_group(process.pid)
+
+    def exec_argv(self, command: str, _token: str) -> list[str]:
+        return ["bash", "-c", command]
+
+    async def stop_exec(self, process: Process, _token: str) -> None:
+        await self.kill_group(process.pid)
 
     async def spawn(self, command: str, log_path: Path, exit_path: Path) -> Job:
         with log_path.open("ab") as log:
@@ -150,6 +164,18 @@ class LocalSandbox:
             start is not None and abs(start - job.proc_start) < self.START_TOLERANCE_S
         )
         return start is not None and same_process
+
+    def memory_bytes(self, job: Job) -> int:
+        total = 0
+
+        for process in psutil.process_iter(["pid", "memory_info"]):
+            try:
+                if os.getpgid(process.info["pid"]) == job.pgid:
+                    total += process.info["memory_info"].rss
+            except ProcessLookupError, PermissionError, TypeError:
+                continue
+
+        return total
 
     async def kill_group(self, pgid: int) -> None:
         for sig in (signal.SIGTERM, signal.SIGKILL):

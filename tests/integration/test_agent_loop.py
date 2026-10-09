@@ -10,7 +10,8 @@ from fakes.run import RunFactory
 from juno.config import Flags
 from juno.domain.events import Event, SessionEnded, SessionStarted, ToolFinished, ToolStarted
 from juno.domain.session import State
-from juno.domain.values import ModelReply, ModelRequest, RunPaths, Task
+from juno.domain.values import ModelReply, ModelRequest, RunPaths, StopReason, Task
+from juno.service.loop import AgentLoop
 
 pytestmark = pytest.mark.anyio
 
@@ -246,3 +247,20 @@ class TestParallelTools:
         created, viewed = run.tool_results()
         assert created["content"] == "created a.txt"
         assert viewed["content"] == "     1\tone"
+
+
+class TestTruncatedReplies:
+    async def test_tool_calls_cut_off_by_the_output_limit_do_not_run(
+        self, runs: RunFactory, paths: RunPaths, clock: FakeClock
+    ) -> None:
+        cut = Reply.tools(
+            ("editor", {"action": "create", "path": "half.py", "file_text": "print('par"})
+        ).model_copy(update={"stop_reason": StopReason.MAX_TOKENS})
+        run = await runs.start([cut, Finish(clock)])
+
+        await run.harness.run()
+
+        [result] = run.tool_results()
+        assert result["is_error"] is True
+        assert result["content"] == AgentLoop.CUT_OFF
+        assert not (paths.workspace / "half.py").exists()

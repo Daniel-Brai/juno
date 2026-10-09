@@ -130,6 +130,10 @@ class JobTools:
         jobs = [await self._refresh(job) for job in list(self._jobs.values())]
         return [job for job in jobs if job.state is JobState.RUNNING]
 
+    async def largest_running(self) -> Job | None:
+        running = await self.running()
+        return max(running, key=self._sandbox.memory_bytes, default=None)
+
     def busy_seconds(self, start: float, end: float) -> float:
         spans = sorted(
             (max(start, job.started_at), min(end, self._last_seen(job, end)))

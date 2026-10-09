@@ -1,7 +1,7 @@
 from hypothesis import given
 from hypothesis import strategies as st
 
-from juno.adapters.local_sandbox import OutputBuffer
+from juno.adapters.sandboxes.local import OutputBuffer
 
 
 class TestOutputBuffer:

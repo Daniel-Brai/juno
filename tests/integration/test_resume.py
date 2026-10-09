@@ -10,7 +10,7 @@ from fakes.clock import FakeClock
 from fakes.crash import Crash, CrashingProbe, CrashingSandbox
 from fakes.llm import Reply, Turn
 from fakes.run import RunFactory, ScriptedRun
-from juno.adapters.sqlite_store import SqliteStore
+from juno.adapters.stores.sqlite import SqliteStore
 from juno.config import BudgetSettings, Flags, ModelSettings
 from juno.domain.events import SessionResumed
 from juno.domain.session import State
