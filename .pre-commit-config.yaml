@@ -43,6 +43,13 @@ repos:
         pass_filenames: false
         types: [python]
 
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        pass_filenames: false
+        types: [python]
+
       - id: import-linter
         name: import-linter
         entry: uv run lint-imports

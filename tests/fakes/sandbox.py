@@ -25,7 +25,7 @@ class StillAliveSandbox:
     def is_alive(self, job: Job) -> bool:
         return job.id in self._alive
 
-    def memory_bytes(self, job: Job) -> int:
+    def memory_bytes(self, _job: Job, /) -> int:
         return 0
 
     async def kill_group(self, pgid: int) -> None:

@@ -158,7 +158,7 @@ class PodmanSandbox(LocalSandbox):
             and not job.exit_path.exists()
         )
 
-    def memory_bytes(self, _job: Job) -> int:
+    def memory_bytes(self, _job: Job, /) -> int:
         return 0
 
     async def kill_group(self, pgid: int) -> None:

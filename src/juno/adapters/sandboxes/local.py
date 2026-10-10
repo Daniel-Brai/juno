@@ -165,7 +165,7 @@ class LocalSandbox:
         )
         return start is not None and same_process
 
-    def memory_bytes(self, job: Job) -> int:
+    def memory_bytes(self, job: Job, /) -> int:
         total = 0
 
         for process in psutil.process_iter(["pid", "memory_info"]):

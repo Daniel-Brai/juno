@@ -91,6 +91,8 @@ class TestPodmanJobs:
             "echo training; exit 3", paths.logs / "j.log", paths.logs / "j.exit"
         )
 
+        code: int | None = None
+
         for _ in range(100):
             if (code := sandbox.poll(job)) is not None:
                 break

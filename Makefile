@@ -10,7 +10,7 @@ help:
 > @printf "  make setup\t\t\tInstall all dependency groups and the git hooks\n"
 > @printf "  make fmt\t\t\tFormat and auto-fix lint issues\n"
 > @printf "  make lint\t\t\tCheck lint and formatting\n"
-> @printf "  make typecheck\t\tRun mypy in strict mode\n"
+> @printf "  make typecheck\t\tRun mypy (strict) and pyright\n"
 > @printf "  make imports\t\t\tCheck the layering contracts\n"
 > @printf "  make test\t\t\tRun the fast test suite in parallel\n"
 > @printf "  make test-all\t\t\tAlso run slow, gpu and live_api tests\n"
@@ -33,6 +33,7 @@ lint:
 
 typecheck:
 > $(UV) run mypy
+> $(UV) run pyright
 
 imports:
 > $(UV) run lint-imports

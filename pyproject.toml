@@ -56,6 +56,7 @@ lint = [
     "import-linter>=2.15",
     "mypy==2.4.1",
     "prek>=0.5.9",
+    "pyright==1.1.414",
     "ruff==0.17.3",
     "types-psutil>=7.2.2.20260906",
 ]
@@ -104,6 +105,13 @@ ignore_missing_imports = true
 init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
+
+
+[tool.pyright]
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
 
 
 [tool.importlinter]
