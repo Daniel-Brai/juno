@@ -1,17 +1,17 @@
 from juno.config import Durations
 from juno.domain.commands import QuerySystem
-from juno.domain.session import Session
-from juno.ports import Clock, ResourceProbe
+from juno.ports import ResourceProbe
+from juno.service.context import RunContext
 from juno.tools.registry import Tool
 
 GIB = 1024**3
 
 
 class SystemTools:
-    def __init__(self, probe: ResourceProbe, clock: Clock, session: Session) -> None:
+    def __init__(self, probe: ResourceProbe, context: RunContext) -> None:
         self._probe = probe
-        self._clock = clock
-        self._session = session
+        self._clock = context.clock
+        self._session = context.session
 
     def tools(self) -> list[Tool[QuerySystem]]:
         return [

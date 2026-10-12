@@ -3,6 +3,7 @@ import os
 import pytest
 
 from juno.adapters.llm.openrouter import OpenRouterClient
+from juno.config import ModelSettings
 from juno.domain.values import Message, ModelRequest, Role, StopReason, ToolSpec
 
 pytestmark = [pytest.mark.anyio, pytest.mark.live_api]
@@ -26,7 +27,10 @@ class TestOpenRouterLive:
         if not key:
             pytest.skip("set OPENROUTER_API_KEY")
 
-        client = OpenRouterClient(key, MODEL, "low", 2_000)
+        client = OpenRouterClient(
+            ModelSettings(provider="openrouter", name=MODEL, effort="low", max_tokens=2_000),
+            api_key=key,
+        )
         request = ModelRequest(
             system="You are testing a tool connection. Use the tool exactly as asked.",
             tools=[BASH],

@@ -1,17 +1,15 @@
 from juno.config import Durations
 from juno.domain.commands import RunBash
-from juno.domain.session import Session
-from juno.ports import Clock, Sandbox
+from juno.ports import Sandbox
+from juno.service.context import RunContext
 from juno.tools.registry import Tool, ToolError
 
 
 class BashTools:
-    def __init__(
-        self, sandbox: Sandbox, clock: Clock, session: Session, max_timeout_s: float
-    ) -> None:
+    def __init__(self, sandbox: Sandbox, context: RunContext, *, max_timeout_s: float) -> None:
         self._sandbox = sandbox
-        self._clock = clock
-        self._session = session
+        self._clock = context.clock
+        self._session = context.session
         self._max_timeout_s = max_timeout_s
 
     def tools(self) -> list[Tool[RunBash]]:

@@ -5,9 +5,9 @@ from typing import Any, ClassVar
 
 from juno.config import Durations
 from juno.domain.commands import CancelJob, InspectJob, ListJobs, SubmitJob, WaitJob
-from juno.domain.session import Session
 from juno.domain.values import Job, JobState
-from juno.ports import Clock, Sandbox, UnitOfWorkFactory
+from juno.ports import Sandbox
+from juno.service.context import RunContext
 from juno.tools.registry import Tool, ToolError
 
 
@@ -18,18 +18,17 @@ class JobTools:
     def __init__(
         self,
         sandbox: Sandbox,
-        units: UnitOfWorkFactory,
-        session: Session,
+        context: RunContext,
+        *,
         logs_dir: Path,
-        clock: Clock,
         max_running: int,
         jobs: Sequence[Job] = (),
     ) -> None:
         self._sandbox = sandbox
-        self._units = units
-        self._session = session
+        self._units = context.units
+        self._session = context.session
+        self._clock = context.clock
         self._logs_dir = logs_dir
-        self._clock = clock
         self._max_running = max_running
         self._jobs = {job.id: job for job in jobs}
 

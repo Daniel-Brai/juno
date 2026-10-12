@@ -67,7 +67,7 @@ class Journal:
     )
 
     def __init__(
-        self, units: UnitOfWorkFactory, registry: ToolRegistry, prompts: Prompts, clock: Clock
+        self, units: UnitOfWorkFactory, *, registry: ToolRegistry, prompts: Prompts, clock: Clock
     ) -> None:
         self._units = units
         self._clock = clock

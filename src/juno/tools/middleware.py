@@ -1,15 +1,14 @@
 from juno.domain.events import ToolFinished, ToolStarted
 from juno.domain.values import ToolCall, ToolResult
-from juno.ports import Clock
-from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 from juno.tools.registry import Dispatch
 
 
 class EmitEvents:
-    def __init__(self, bus: MessageBus, clock: Clock, session_id: str) -> None:
-        self._bus = bus
-        self._clock = clock
-        self._session_id = session_id
+    def __init__(self, context: RunContext) -> None:
+        self._bus = context.bus
+        self._clock = context.clock
+        self._session_id = context.session.id
 
     async def __call__(self, call: ToolCall, proceed: Dispatch) -> ToolResult:
         started = self._clock.now()

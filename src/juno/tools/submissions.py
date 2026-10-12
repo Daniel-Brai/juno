@@ -7,8 +7,7 @@ from typing import Any
 from juno.domain.commands import ListSubmissions, RegisterSubmission
 from juno.domain.events import SubmissionRegistered
 from juno.domain.values import Direction, Submission
-from juno.ports import Clock, UnitOfWorkFactory
-from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 from juno.tools.registry import Tool, ToolError
 from juno.tools.workspace import Workspace
 
@@ -16,21 +15,19 @@ from juno.tools.workspace import Workspace
 class SubmissionTools:
     def __init__(
         self,
-        units: UnitOfWorkFactory,
         workspace: Workspace,
+        context: RunContext,
+        *,
         store_dir: Path,
-        session_id: str,
         direction: Direction,
-        clock: Clock,
-        bus: MessageBus,
     ) -> None:
-        self._units = units
         self._workspace = workspace
+        self._units = context.units
+        self._session_id = context.session.id
+        self._clock = context.clock
+        self._bus = context.bus
         self._store_dir = store_dir
-        self._session_id = session_id
         self._direction = direction
-        self._clock = clock
-        self._bus = bus
 
     def tools(self) -> list[Tool[Any]]:
         better = "Lower" if self._direction is Direction.MINIMIZE else "Higher"

@@ -12,10 +12,10 @@ from juno.domain.events import (
     SubmissionRegistered,
     TurnContinued,
 )
-from juno.domain.session import Session
 from juno.domain.values import Checkpoint
 from juno.ports import Checkpointer, Clock, UnitOfWorkFactory
 from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 
 
 class EventRecorder:
@@ -34,19 +34,12 @@ class EventRecorder:
 class CheckpointRecorder:
     TRIGGERS: tuple[type[Event], ...] = (SubmissionRegistered, TurnContinued, SessionEnded)
 
-    def __init__(
-        self,
-        checkpointer: Checkpointer,
-        units: UnitOfWorkFactory,
-        bus: MessageBus,
-        clock: Clock,
-        session: Session,
-    ) -> None:
+    def __init__(self, checkpointer: Checkpointer, context: RunContext) -> None:
         self._checkpointer = checkpointer
-        self._units = units
-        self._bus = bus
-        self._clock = clock
-        self._session = session
+        self._units = context.units
+        self._bus = context.bus
+        self._clock = context.clock
+        self._session = context.session
 
     def attach(self) -> None:
         for trigger in self.TRIGGERS:

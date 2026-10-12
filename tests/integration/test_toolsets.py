@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import time
 from pathlib import Path
@@ -22,8 +23,8 @@ from juno.domain.commands import (
 from juno.domain.events import Event, SubmissionRegistered
 from juno.domain.session import Session
 from juno.domain.values import Direction, Job, JobState, RunPaths
-from juno.ports import UnitOfWorkFactory
 from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 from juno.tools.bash import BashTools
 from juno.tools.jobs import JobTools
 from juno.tools.registry import ToolError
@@ -41,10 +42,10 @@ def sandbox(paths: RunPaths) -> LocalSandbox:
 
 class TestBashTools:
     async def test_reports_exit_code_and_output(
-        self, sandbox: LocalSandbox, clock: FakeClock
+        self, sandbox: LocalSandbox, context: RunContext, clock: FakeClock
     ) -> None:
         session = Session(task_id="t", started_at=clock.now(), deadline=clock.now() + 60)
-        bash = BashTools(sandbox, clock, session, max_timeout_s=10)
+        bash = BashTools(sandbox, dataclasses.replace(context, session=session), max_timeout_s=10)
 
         output = await bash.run(RunBash(command="echo ready"))
 
@@ -52,10 +53,10 @@ class TestBashTools:
         assert output.endswith("ready\n")
 
     async def test_refuses_to_run_past_the_deadline(
-        self, sandbox: LocalSandbox, clock: FakeClock
+        self, sandbox: LocalSandbox, context: RunContext, clock: FakeClock
     ) -> None:
         session = Session(task_id="t", started_at=clock.now(), deadline=clock.now())
-        bash = BashTools(sandbox, clock, session, max_timeout_s=10)
+        bash = BashTools(sandbox, dataclasses.replace(context, session=session), max_timeout_s=10)
 
         with pytest.raises(ToolError, match="budget is spent"):
             await bash.run(RunBash(command="echo late"))
@@ -63,22 +64,8 @@ class TestBashTools:
 
 class TestJobTools:
     @pytest.fixture
-    def jobs(
-        self,
-        sandbox: LocalSandbox,
-        units: UnitOfWorkFactory,
-        session: Session,
-        paths: RunPaths,
-        clock: FakeClock,
-    ) -> JobTools:
-        return JobTools(
-            sandbox,
-            units,
-            session,
-            paths.logs,
-            clock,
-            max_running=1,
-        )
+    def jobs(self, sandbox: LocalSandbox, context: RunContext, paths: RunPaths) -> JobTools:
+        return JobTools(sandbox, context, logs_dir=paths.logs, max_running=1)
 
     async def test_submit_then_wait_shows_the_log(self, jobs: JobTools) -> None:
         started = await jobs.submit(SubmitJob(command="echo epoch 1; echo epoch 2", name="train"))
@@ -123,21 +110,9 @@ class TestJobTools:
 
 class TestSubmissionTools:
     @pytest.fixture
-    def bus(self) -> MessageBus:
-        return MessageBus()
-
-    @pytest.fixture
-    def tools(
-        self,
-        units: UnitOfWorkFactory,
-        session: Session,
-        workspace: Workspace,
-        paths: RunPaths,
-        clock: FakeClock,
-        bus: MessageBus,
-    ) -> SubmissionTools:
+    def tools(self, workspace: Workspace, context: RunContext, paths: RunPaths) -> SubmissionTools:
         return SubmissionTools(
-            units, workspace, paths.submissions, session.id, Direction.MINIMIZE, clock, bus
+            workspace, context, store_dir=paths.submissions, direction=Direction.MINIMIZE
         )
 
     async def test_registers_copies_and_tracks_the_best(
@@ -183,9 +158,11 @@ class TestSubmissionTools:
 
 
 class TestSystemTools:
-    async def test_reports_resources_and_time(self, probe: FakeProbe, clock: FakeClock) -> None:
+    async def test_reports_resources_and_time(
+        self, probe: FakeProbe, context: RunContext, clock: FakeClock
+    ) -> None:
         session = Session(task_id="t", started_at=clock.now(), deadline=clock.now() + 7_200)
-        system = SystemTools(probe, clock, session)
+        system = SystemTools(probe, dataclasses.replace(context, session=session))
         clock.advance(1_800)
 
         output = await system.run(QuerySystem())
@@ -217,18 +194,14 @@ class TestJobBusyTime:
         os.utime(path, (at, at))
 
     def tools(
-        self,
-        units: UnitOfWorkFactory,
-        session: Session,
-        paths: RunPaths,
-        clock: FakeClock,
-        jobs: list[Job],
-        alive: set[str],
+        self, context: RunContext, paths: RunPaths, jobs: list[Job], alive: set[str]
     ) -> JobTools:
-        return JobTools(StillAliveSandbox(alive), units, session, paths.logs, clock, 4, jobs)
+        return JobTools(
+            StillAliveSandbox(alive), context, logs_dir=paths.logs, max_running=4, jobs=jobs
+        )
 
     async def test_counts_each_jobs_time_inside_the_window(
-        self, units: UnitOfWorkFactory, session: Session, paths: RunPaths, clock: FakeClock
+        self, context: RunContext, paths: RunPaths
     ) -> None:
         start = time.time() - 1_000
         finished = self.make(paths, "job-1", start - 100)
@@ -236,27 +209,25 @@ class TestJobBusyTime:
         running = self.make(paths, "job-3", start + 900)
         self.touch(finished.exit_path, start + 300)
         self.touch(lost.log_path, start + 700)
-        tools = self.tools(units, session, paths, clock, [finished, lost, running], {"job-3"})
+        tools = self.tools(context, paths, [finished, lost, running], {"job-3"})
 
         assert tools.busy_seconds(start, start + 1_000) == pytest.approx(300 + 100 + 100)
 
     async def test_overlapping_jobs_are_counted_once(
-        self, units: UnitOfWorkFactory, session: Session, paths: RunPaths, clock: FakeClock
+        self, context: RunContext, paths: RunPaths
     ) -> None:
         start = time.time() - 1_000
         first = self.make(paths, "job-1", start)
         second = self.make(paths, "job-2", start + 200)
         self.touch(first.exit_path, start + 500)
         self.touch(second.exit_path, start + 600)
-        tools = self.tools(units, session, paths, clock, [first, second], set())
+        tools = self.tools(context, paths, [first, second], set())
 
         assert tools.busy_seconds(start, start + 1_000) == pytest.approx(600)
 
-    async def test_finished_jobs_do_not_count(
-        self, units: UnitOfWorkFactory, session: Session, paths: RunPaths, clock: FakeClock
-    ) -> None:
+    async def test_finished_jobs_do_not_count(self, context: RunContext, paths: RunPaths) -> None:
         start = time.time() - 1_000
         done = self.make(paths, "job-1", start).model_copy(update={"state": JobState.SUCCEEDED})
-        tools = self.tools(units, session, paths, clock, [done], {"job-1"})
+        tools = self.tools(context, paths, [done], {"job-1"})
 
         assert tools.busy_seconds(start, start + 1_000) == 0

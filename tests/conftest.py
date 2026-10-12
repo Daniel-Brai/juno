@@ -10,6 +10,8 @@ from juno.adapters.stores.sqlite import SqliteStore
 from juno.domain.session import Session
 from juno.domain.values import Direction, Message, ModelRequest, Role, RunPaths, Task, ToolSpec
 from juno.ports import UnitOfWorkFactory
+from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 from juno.tools.workspace import Workspace
 
 GATED_MARKERS = {"live_api": "live", "gpu": "gpu"}
@@ -71,6 +73,18 @@ async def units(store: SqliteStore, session: Session) -> UnitOfWorkFactory:
         await uow.commit()
 
     return store.unit_of_work
+
+
+@pytest.fixture
+def bus() -> MessageBus:
+    return MessageBus()
+
+
+@pytest.fixture
+def context(
+    session: Session, clock: FakeClock, units: UnitOfWorkFactory, bus: MessageBus
+) -> RunContext:
+    return RunContext(session=session, clock=clock, units=units, bus=bus)
 
 
 @pytest.fixture

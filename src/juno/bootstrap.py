@@ -17,6 +17,7 @@ from juno.domain.session import Session
 from juno.domain.values import Job, RunPaths, Submission, Task, Usage
 from juno.ports import Checkpointer, Clock, LlmClient, ResourceProbe, Sandbox
 from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 from juno.service.journal import Journal, SetupChanged
 from juno.service.loop import AgentLoop
 from juno.service.prompts import Prompts
@@ -164,13 +165,9 @@ class Harness:
             if not key:
                 raise RuntimeError("set OPENROUTER_API_KEY to use the openrouter provider")
 
-            return OpenRouterClient(
-                key, model.name, model.effort, model.max_tokens, session_id=session.id
-            )
+            return OpenRouterClient(model, api_key=key, session_id=session.id)
 
-        return AnthropicClient(
-            model.name, model.effort, model.max_tokens, compaction=config.flags.compaction
-        )
+        return AnthropicClient(model, compaction=config.flags.compaction)
 
     @staticmethod
     def sandbox_for(
@@ -180,14 +177,11 @@ class Harness:
             return LocalSandbox(paths.workspace)
 
         return PodmanSandbox(
+            config.sandbox,
             name=f"juno-{session.id[-12:]}",
-            image=config.sandbox.image,
             workspace=paths.workspace,
             logs=paths.logs,
             data=task.data_dir,
-            memory=config.sandbox.memory,
-            gpus=config.sandbox.gpus,
-            network=config.sandbox.network,
         )
 
     async def run(self) -> Submission | None:
@@ -240,11 +234,10 @@ class Harness:
         probe = adapters.probe or SystemProbe()
         workspace = Workspace(paths.workspace)
         bus = MessageBus()
-        registry = ToolRegistry(
-            middleware=[EmitEvents(bus, clock, session.id), ContainErrors(), TruncateOutput()]
-        )
+        context = RunContext(session=session, clock=clock, units=units, bus=bus)
+        registry = ToolRegistry(middleware=[EmitEvents(context), ContainErrors(), TruncateOutput()])
         registry.register(
-            BashTools(sandbox, clock, session, config.budget.bash_timeout),
+            BashTools(sandbox, context, max_timeout_s=config.budget.bash_timeout),
             EditorTools(workspace),
         )
 
@@ -253,17 +246,21 @@ class Harness:
 
         if flags.jobs:
             jobs = JobTools(
-                sandbox, units, session, paths.logs, clock, config.budget.max_jobs, stored_jobs
+                sandbox,
+                context,
+                logs_dir=paths.logs,
+                max_running=config.budget.max_jobs,
+                jobs=stored_jobs,
             )
             registry.register(jobs)
 
         if flags.system:
-            registry.register(SystemTools(probe, clock, session))
+            registry.register(SystemTools(probe, context))
 
         if flags.submission:
             registry.register(
                 SubmissionTools(
-                    units, workspace, paths.submissions, session.id, task.direction, clock, bus
+                    workspace, context, store_dir=paths.submissions, direction=task.direction
                 )
             )
 
@@ -273,25 +270,25 @@ class Harness:
             else task
         )
         prompts = Prompts(seen_task, config.budget.total)
-        journal = Journal(units, registry, prompts, clock)
+        journal = Journal(units, registry=registry, prompts=prompts, clock=clock)
+
         EventRecorder(units).attach(bus)
         LogRecorder().attach(bus)
         CacheMonitor(bus, clock).attach()
         CheckpointRecorder(
-            adapters.checkpointer or GitCheckpointer(paths.workspace), units, bus, clock, session
+            adapters.checkpointer or GitCheckpointer(paths.workspace), context
         ).attach()
 
         llm = adapters.llm or cls.llm_for(config, session)
         watchdog = MemoryWatchdog(
             probe,
             jobs,
-            bus,
-            clock,
-            session.id,
-            config.watchdog.memory_fraction,
-            config.watchdog.interval,
+            context,
+            limit=config.watchdog.memory_fraction,
+            interval_s=config.watchdog.interval,
         )
-        loop = AgentLoop(llm, journal, clock, bus, prompts, jobs)
+        loop = AgentLoop(llm, journal, clock=clock, bus=bus, prompts=prompts, jobs=jobs)
+
         return cls(
             session=session,
             loop=loop,

@@ -39,12 +39,11 @@ async def sandbox(paths: RunPaths) -> AsyncIterator[PodmanSandbox]:
     data.mkdir()
     (data / "train.csv").write_text("id,label\n1,0\n")
     box = PodmanSandbox(
+        SandboxSettings(image=IMAGE, memory="512m"),
         name=f"juno-test-{uuid7().hex[-12:]}",
-        image=IMAGE,
         workspace=paths.workspace,
         logs=paths.logs,
         data=data,
-        memory="512m",
     )
     await box.start()
     yield box

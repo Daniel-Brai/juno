@@ -8,6 +8,7 @@ from anthropic.types.beta import BetaMessage
 
 from juno.adapters.llm.anthropic import AnthropicClient
 from juno.adapters.llm.openrouter import OpenRouterClient, OpenRouterError
+from juno.config import ModelSettings
 from juno.domain.values import Message, ModelRequest, Role, StopReason, ToolSpec, Usage
 
 pytestmark = pytest.mark.anyio
@@ -34,11 +35,13 @@ HISTORY = [
     ),
 ]
 REQUEST = ModelRequest(system="Be an engineer.", tools=[TOOL], messages=HISTORY)
+OPUS = ModelSettings()
+FLASH = ModelSettings(provider="openrouter", name="deepseek/deepseek-v4-flash", max_tokens=8_000)
 
 
 class TestAnthropicClient:
     def test_request_turns_on_caching_thinking_and_fallbacks(self) -> None:
-        params = AnthropicClient("claude-opus-5-5", "high", 64_000).params(REQUEST)
+        params = AnthropicClient(OPUS).params(REQUEST)
 
         assert params["model"] == "claude-opus-5-5"
         assert params["thinking"] == {"type": "adaptive"}
@@ -51,7 +54,7 @@ class TestAnthropicClient:
         assert "context_management" not in params
 
     def test_compaction_adds_its_beta(self) -> None:
-        params = AnthropicClient("claude-opus-5-5", "high", 64_000, compaction=True).params(REQUEST)
+        params = AnthropicClient(OPUS, compaction=True).params(REQUEST)
 
         assert "compact-2026-01-12" in params["betas"]
         assert params["context_management"] == {"edits": [{"type": "compact_20260112"}]}
@@ -95,9 +98,7 @@ class TestAnthropicClient:
 
 class TestOpenRouterTranslation:
     def test_history_becomes_chat_messages(self) -> None:
-        payload = OpenRouterClient("key", "deepseek/deepseek-v4-flash", "high", 8_000).payload(
-            REQUEST
-        )
+        payload = OpenRouterClient(FLASH, api_key="key").payload(REQUEST)
 
         system, user, assistant, tool = payload["messages"]
         assert system == {"role": "system", "content": "Be an engineer."}
@@ -117,9 +118,9 @@ class TestOpenRouterTranslation:
         assert "cache_control" not in payload
 
     def test_anthropic_models_ask_for_caching(self) -> None:
-        payload = OpenRouterClient("key", "anthropic/claude-opus-5.5", "high", 8_000).payload(
-            REQUEST
-        )
+        payload = OpenRouterClient(
+            ModelSettings(provider="openrouter", name="anthropic/claude-opus-5.5"), api_key="key"
+        ).payload(REQUEST)
 
         assert payload["cache_control"] == {"type": "ephemeral"}
 
@@ -221,7 +222,7 @@ class TestOpenRouterTransport:
                 ),
             ]
         )
-        client = OpenRouterClient("secret", "deepseek/deepseek-v4-flash", "high", 8_000)
+        client = OpenRouterClient(FLASH, api_key="secret")
 
         reply = await client.complete(REQUEST)
         await client.close()
@@ -233,7 +234,7 @@ class TestOpenRouterTransport:
     @respx.mock
     async def test_client_errors_are_not_retried(self) -> None:
         route = respx.post(OpenRouterClient.URL).mock(return_value=httpx.Response(400, json={}))
-        client = OpenRouterClient("secret", "x/y", "high", 8_000)
+        client = OpenRouterClient(FLASH, api_key="secret")
 
         with pytest.raises(httpx.HTTPStatusError):
             await client.complete(REQUEST)
@@ -246,7 +247,7 @@ class TestOpenRouterTransport:
         respx.post(OpenRouterClient.URL).mock(
             return_value=httpx.Response(200, json={"error": {"message": "no credits"}})
         )
-        client = OpenRouterClient("secret", "x/y", "high", 8_000)
+        client = OpenRouterClient(FLASH, api_key="secret")
 
         with pytest.raises(OpenRouterError, match="no credits"):
             await client.complete(REQUEST)

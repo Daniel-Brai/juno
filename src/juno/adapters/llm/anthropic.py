@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from anthropic import AsyncAnthropic
 from anthropic.types.beta import BetaMessage
 
+from juno.config import ModelSettings
 from juno.domain.values import ModelReply, ModelRequest, StopReason, Usage
 
 
@@ -13,23 +14,20 @@ class AnthropicClient:
 
     def __init__(
         self,
-        model: str,
-        effort: str,
-        max_tokens: int,
+        settings: ModelSettings,
+        *,
         compaction: bool = False,
         client: AsyncAnthropic | None = None,
     ) -> None:
-        self._model = model
-        self._effort = effort
-        self._max_tokens = max_tokens
+        self._settings = settings
         self._compaction = compaction
         self._client = client or AsyncAnthropic(max_retries=5)
 
     def params(self, request: ModelRequest) -> dict[str, Any]:
         betas = [self.FALLBACK_BETA]
         params: dict[str, Any] = {
-            "model": self._model,
-            "max_tokens": self._max_tokens,
+            "model": self._settings.name,
+            "max_tokens": self._settings.max_tokens,
             "system": request.system,
             "messages": [message.model_dump(mode="json") for message in request.messages],
             "tools": [
@@ -37,7 +35,7 @@ class AnthropicClient:
                 for tool in request.tools
             ],
             "thinking": {"type": "adaptive"},
-            "output_config": {"effort": self._effort},
+            "output_config": {"effort": self._settings.effort},
             "cache_control": {"type": "ephemeral", "ttl": self.CACHE_TTL},
             "fallbacks": "default",
         }

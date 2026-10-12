@@ -32,6 +32,7 @@ class AgentLoop:
         self,
         llm: LlmClient,
         journal: Journal,
+        *,
         clock: Clock,
         bus: MessageBus,
         prompts: Prompts,

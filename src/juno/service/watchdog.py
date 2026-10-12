@@ -4,8 +4,8 @@ from typing import Protocol
 from juno.domain.commands import CancelJob
 from juno.domain.events import ResourcePressure
 from juno.domain.values import Job
-from juno.ports import Clock, ResourceProbe
-from juno.service.bus import MessageBus
+from juno.ports import ResourceProbe
+from juno.service.context import RunContext
 
 
 class StoppableJobs(Protocol):
@@ -19,17 +19,16 @@ class MemoryWatchdog:
         self,
         probe: ResourceProbe,
         jobs: StoppableJobs | None,
-        bus: MessageBus,
-        clock: Clock,
-        session_id: str,
+        context: RunContext,
+        *,
         limit: float,
         interval_s: float,
     ) -> None:
         self._probe = probe
         self._jobs = jobs
-        self._bus = bus
-        self._clock = clock
-        self._session_id = session_id
+        self._bus = context.bus
+        self._clock = context.clock
+        self._session_id = context.session.id
         self._limit = limit
         self._interval_s = interval_s
 

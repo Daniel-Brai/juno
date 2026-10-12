@@ -4,6 +4,7 @@ from typing import Any, ClassVar
 
 import httpx
 
+from juno.config import ModelSettings
 from juno.domain.values import (
     ContentBlock,
     Message,
@@ -35,16 +36,13 @@ class OpenRouterClient:
 
     def __init__(
         self,
+        settings: ModelSettings,
+        *,
         api_key: str,
-        model: str,
-        effort: str,
-        max_tokens: int,
         session_id: str | None = None,
         http: httpx.AsyncClient | None = None,
     ) -> None:
-        self._model = model
-        self._effort = effort
-        self._max_tokens = max_tokens
+        self._settings = settings
         self._session_id = session_id
         self._http = http or httpx.AsyncClient(timeout=httpx.Timeout(900, connect=30))
         self._headers = {
@@ -54,20 +52,20 @@ class OpenRouterClient:
 
     def payload(self, request: ModelRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self._model,
-            "max_tokens": self._max_tokens,
+            "model": self._settings.name,
+            "max_tokens": self._settings.max_tokens,
             "messages": [
                 {"role": "system", "content": request.system},
                 *(item for message in request.messages for item in self.to_chat(message)),
             ],
             "tools": [self.to_function(tool) for tool in request.tools],
-            "reasoning": {"effort": self._effort},
+            "reasoning": {"effort": self._settings.effort},
         }
 
         if self._session_id is not None:
             payload["session_id"] = self._session_id
 
-        if self._model.startswith("anthropic/"):
+        if self._settings.name.startswith("anthropic/"):
             payload["cache_control"] = {"type": "ephemeral"}
 
         return payload

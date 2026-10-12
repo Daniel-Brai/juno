@@ -4,6 +4,7 @@ from fakes.clock import FakeClock
 from juno.domain.events import Event, ToolFinished, ToolStarted
 from juno.domain.values import ToolCall, ToolResult
 from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 from juno.tools.middleware import ContainErrors, EmitEvents, TruncateOutput
 
 pytestmark = pytest.mark.anyio
@@ -49,8 +50,9 @@ class TestContainErrors:
 
 
 class TestEmitEvents:
-    async def test_publishes_start_and_finish_with_duration(self, clock: FakeClock) -> None:
-        bus = MessageBus()
+    async def test_publishes_start_and_finish_with_duration(
+        self, context: RunContext, clock: FakeClock, bus: MessageBus
+    ) -> None:
         seen: list[Event] = []
 
         async def record(event: Event) -> None:
@@ -58,8 +60,8 @@ class TestEmitEvents:
 
         bus.subscribe(Event, record)
 
-        result = await EmitEvents(bus, clock, "s1")(CALL, Fixed("ok", clock, takes_s=12))
+        result = await EmitEvents(context)(CALL, Fixed("ok", clock, takes_s=12))
 
         assert [type(event) for event in seen] == [ToolStarted, ToolFinished]
         assert result.duration_s == 12
-        assert seen[1] == ToolFinished(session_id="s1", at=clock.now(), result=result)
+        assert seen[1] == ToolFinished(session_id=context.session.id, at=clock.now(), result=result)

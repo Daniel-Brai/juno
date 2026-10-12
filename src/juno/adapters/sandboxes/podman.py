@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from juno.adapters.sandboxes.local import LocalSandbox
+from juno.config import SandboxSettings
 from juno.domain.values import Job
 
 
@@ -29,24 +30,19 @@ class PodmanSandbox(LocalSandbox):
 
     def __init__(
         self,
+        settings: SandboxSettings,
+        *,
         name: str,
-        image: str,
         workspace: Path,
         logs: Path,
         data: Path | None = None,
-        memory: str | None = None,
-        gpus: tuple[int, ...] = (),
-        network: bool = False,
         output_limit: int = 30_000,
     ) -> None:
         super().__init__(workspace, output_limit)
         self.name = name
-        self._image = image
+        self._settings = settings
         self._logs = logs
         self._data = data
-        self._memory = memory
-        self._gpus = gpus
-        self._network = network
         self._incarnation: float | None = None
 
     def run_argv(self) -> list[str]:
@@ -63,7 +59,7 @@ class PodmanSandbox(LocalSandbox):
             "--pids-limit",
             str(self.PIDS_LIMIT),
             "--network",
-            "slirp4netns" if self._network else "none",
+            "slirp4netns" if self._settings.network else "none",
             "--volume",
             f"{self._workspace}:{self.WORKSPACE}:Z",
             "--volume",
@@ -73,13 +69,13 @@ class PodmanSandbox(LocalSandbox):
         if self._data is not None:
             argv += ["--volume", f"{self._data}:{self.DATA}:ro,z"]
 
-        if self._memory is not None:
-            argv += ["--memory", self._memory]
+        if self._settings.memory is not None:
+            argv += ["--memory", self._settings.memory]
 
-        for gpu in self._gpus:
+        for gpu in self._settings.gpus:
             argv += ["--device", f"nvidia.com/gpu={gpu}"]
 
-        return [*argv, self._image, "sleep", "infinity"]
+        return [*argv, self._settings.image, "sleep", "infinity"]
 
     async def start(self) -> None:
         if not await self._succeeds("container", "exists", self.name):

@@ -8,6 +8,7 @@ from juno.domain.commands import CancelJob
 from juno.domain.events import CacheMissed, Event, ModelCalled, ResourcePressure, ToolFinished
 from juno.domain.values import Job, ToolResult, Usage
 from juno.service.bus import MessageBus
+from juno.service.context import RunContext
 from juno.service.recorders import CacheMonitor, LogRecorder
 from juno.service.watchdog import MemoryWatchdog
 
@@ -48,22 +49,26 @@ JOB = Job(
 
 
 class TestMemoryWatchdog:
-    def watchdog(self, probe: FakeProbe, jobs: Jobs | None, bus: MessageBus) -> MemoryWatchdog:
-        return MemoryWatchdog(probe, jobs, bus, FakeClock(), "s1", limit=0.95, interval_s=0.01)
+    def watchdog(self, probe: FakeProbe, jobs: Jobs | None, context: RunContext) -> MemoryWatchdog:
+        return MemoryWatchdog(probe, jobs, context, limit=0.95, interval_s=0.01)
 
-    async def test_does_nothing_below_the_limit(self, probe: FakeProbe) -> None:
-        jobs, bus = Jobs(JOB), MessageBus()
-        seen = Seen(bus)
+    async def test_does_nothing_below_the_limit(
+        self, probe: FakeProbe, context: RunContext
+    ) -> None:
+        jobs = Jobs(JOB)
+        seen = Seen(context.bus)
 
-        assert await self.watchdog(probe, jobs, bus).check() is None
+        assert await self.watchdog(probe, jobs, context).check() is None
         assert jobs.cancelled == [] and seen.events == []
 
-    async def test_stops_the_largest_job_when_memory_runs_out(self, probe: FakeProbe) -> None:
+    async def test_stops_the_largest_job_when_memory_runs_out(
+        self, probe: FakeProbe, context: RunContext
+    ) -> None:
         probe.near_oom(0.97)
-        jobs, bus = Jobs(JOB), MessageBus()
-        seen = Seen(bus)
+        jobs = Jobs(JOB)
+        seen = Seen(context.bus)
 
-        victim = await self.watchdog(probe, jobs, bus).check()
+        victim = await self.watchdog(probe, jobs, context).check()
 
         assert victim == JOB
         assert jobs.cancelled == ["job-1"]
@@ -71,12 +76,13 @@ class TestMemoryWatchdog:
         assert isinstance(event, ResourcePressure)
         assert event.reason == "RAM at 97%; stopped job-1 (train)"
 
-    async def test_reports_pressure_even_with_no_job_to_stop(self, probe: FakeProbe) -> None:
+    async def test_reports_pressure_even_with_no_job_to_stop(
+        self, probe: FakeProbe, context: RunContext
+    ) -> None:
         probe.near_oom(0.99)
-        bus = MessageBus()
-        seen = Seen(bus)
+        seen = Seen(context.bus)
 
-        await self.watchdog(probe, None, bus).check()
+        await self.watchdog(probe, None, context).check()
 
         assert [type(event) for event in seen.events] == [ResourcePressure]
 
