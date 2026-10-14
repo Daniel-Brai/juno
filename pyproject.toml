@@ -84,6 +84,7 @@ ignore = ["E501"]
 "src/juno/adapters/sandboxes/*.py" = ["S603", "S607"]
 "src/juno/adapters/git.py" = ["S603", "S607"]
 "src/juno/config.py" = ["ARG003"]
+"src/juno/eval/stats.py" = ["S311"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["juno", "fakes"]
@@ -134,6 +135,12 @@ name = "Only bootstrap wires adapters"
 type = "forbidden"
 source_modules = ["juno.domain", "juno.ports", "juno.config", "juno.service", "juno.tools"]
 forbidden_modules = ["juno.adapters", "juno.bootstrap"]
+
+[[tool.importlinter.contracts]]
+name = "Eval reads runs, it does not drive them"
+type = "forbidden"
+source_modules = ["juno.eval"]
+forbidden_modules = ["juno.service", "juno.tools", "juno.adapters", "juno.bootstrap", "juno.entrypoints"]
 
 
 [tool.pytest.ini_options]
