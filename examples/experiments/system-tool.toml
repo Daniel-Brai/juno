@@ -1,0 +1,17 @@
+[experiment]
+name = "system-tool"
+budget = "15m"
+max_cost = 0.25
+max_total_cost = 1.0
+seeds = 2
+parallel = 2
+runs = "../../runs/experiments"
+
+[[tasks]]
+path = "../tasks/quickstart"
+answers = "../answers/quickstart"
+
+[arms.base]
+
+[arms.no_system]
+flags = { "tools.system" = false }

@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from typing import ClassVar, Protocol
 
 from juno.domain.events import (
+    BudgetSpent,
     ModelCalled,
     SessionEnded,
     SessionResumed,
@@ -57,9 +58,17 @@ class AgentLoop:
         while not session.terminal:
             if session.state is State.WRAPPING_UP:
                 await self._wrap_up(session)
-            elif session.remaining(self._clock.now()) <= 0:
+            elif limit := session.limit_reached(self._clock.now()):
                 session.fire(Trigger.BUDGET_SPENT)
                 await self.journal.save(session)
+                await self._bus.publish(
+                    BudgetSpent(
+                        session_id=session.id,
+                        at=self._clock.now(),
+                        limit=limit,
+                        cost_usd=session.usage.cost_usd,
+                    )
+                )
             else:
                 await self._turn(session)
 

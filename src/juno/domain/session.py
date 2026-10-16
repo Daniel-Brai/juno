@@ -18,6 +18,11 @@ class State(StrEnum):
     FAILED = "failed"
 
 
+class Limit(StrEnum):
+    TIME = "time"
+    COST = "cost"
+
+
 class Trigger(StrEnum):
     START = "start"
     TOOL_USE = "tool_use"
@@ -60,6 +65,7 @@ class Session(BaseModel):
     seed: int = 0
     started_at: float
     deadline: float
+    cost_limit: float | None = None
     state: State = State.STARTING
     last_active_at: float | None = None
     paused_s: float = 0.0
@@ -74,8 +80,18 @@ class Session(BaseModel):
     def remaining(self, now: float) -> float:
         return max(0.0, self.deadline - now)
 
+    def limit_reached(self, now: float) -> Limit | None:
+        if self.remaining(now) <= 0:
+            return Limit.TIME
+
+        if self.cost_limit is not None and self.usage.cost_usd >= self.cost_limit:
+            return Limit.COST
+
+        return None
+
     def elapsed(self, now: float) -> float:
-        return max(0.0, now - self.started_at - self.paused_s)
+        end = self.last_active_at if self.terminal and self.last_active_at is not None else now
+        return max(0.0, end - self.started_at - self.paused_s)
 
     def touch(self, now: float) -> None:
         self.last_active_at = now

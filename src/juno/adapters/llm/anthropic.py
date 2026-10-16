@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from anthropic import AsyncAnthropic
@@ -5,6 +7,58 @@ from anthropic.types.beta import BetaMessage
 
 from juno.config import ModelSettings
 from juno.domain.values import ModelReply, ModelRequest, StopReason, Usage
+
+
+@dataclass(frozen=True, slots=True)
+class Price:
+    input: float
+    output: float
+    cache_read: float
+    large_prompt: Price | None = None
+    large_above: int = 100_000
+
+
+class AnthropicPrices:
+    PER_MILLION: ClassVar[Mapping[str, Price]] = {
+        "claude-fable-5-1": Price(input=10, output=50, cache_read=0.25),
+        "claude-fable-5": Price(input=10, output=50, cache_read=1),
+        "claude-opus-5-5": Price(input=4, output=20, cache_read=0.2),
+        "claude-opus-5": Price(input=5, output=25, cache_read=0.5),
+        "claude-sonnet-5-5": Price(input=2, output=10, cache_read=0.2),
+        "claude-haiku-5-5": Price(
+            input=0.1,
+            output=0.5,
+            cache_read=0.01,
+            large_prompt=Price(input=0.5, output=2.5, cache_read=0.05),
+        ),
+    }
+    CACHE_WRITE: ClassVar[float] = 2.0
+
+    @classmethod
+    def knows(cls, model: str) -> bool:
+        return model in cls.PER_MILLION
+
+    @classmethod
+    def cost(cls, model: str, usage: Usage) -> float:
+        price = cls.PER_MILLION.get(model)
+
+        if price is None:
+            return 0.0
+
+        prompt = (
+            usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+        )
+
+        if price.large_prompt is not None and prompt > price.large_above:
+            price = price.large_prompt
+
+        dollars = (
+            usage.input_tokens * price.input
+            + usage.cache_creation_input_tokens * price.input * cls.CACHE_WRITE
+            + usage.cache_read_input_tokens * price.cache_read
+            + usage.output_tokens * price.output
+        )
+        return dollars / 1_000_000
 
 
 class AnthropicClient:
@@ -58,16 +112,16 @@ class AnthropicClient:
 
     @staticmethod
     def reply(message: BetaMessage) -> ModelReply:
-        usage = message.usage
         stop = message.stop_reason or StopReason.END_TURN
+        usage = Usage(
+            input_tokens=message.usage.input_tokens,
+            output_tokens=message.usage.output_tokens,
+            cache_creation_input_tokens=message.usage.cache_creation_input_tokens or 0,
+            cache_read_input_tokens=message.usage.cache_read_input_tokens or 0,
+        )
 
         return ModelReply(
             content=[block.model_dump(mode="json", exclude_none=True) for block in message.content],
             stop_reason=StopReason(stop) if stop in StopReason else StopReason.END_TURN,
-            usage=Usage(
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
-                cache_read_input_tokens=usage.cache_read_input_tokens or 0,
-            ),
+            usage=usage.model_copy(update={"cost_usd": AnthropicPrices.cost(message.model, usage)}),
         )

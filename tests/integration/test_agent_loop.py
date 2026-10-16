@@ -7,10 +7,17 @@ import pytest
 from fakes.clock import FakeClock
 from fakes.llm import Reply, Turn
 from fakes.run import RunFactory
-from juno.config import Flags
-from juno.domain.events import Event, SessionEnded, SessionStarted, ToolFinished, ToolStarted
-from juno.domain.session import State
-from juno.domain.values import ModelReply, ModelRequest, RunPaths, StopReason, Task
+from juno.config import BudgetSettings, Flags
+from juno.domain.events import (
+    BudgetSpent,
+    Event,
+    SessionEnded,
+    SessionStarted,
+    ToolFinished,
+    ToolStarted,
+)
+from juno.domain.session import Limit, State
+from juno.domain.values import ModelReply, ModelRequest, RunPaths, StopReason, Task, Usage
 from juno.service.loop import AgentLoop
 
 pytestmark = pytest.mark.anyio
@@ -161,6 +168,21 @@ class TestEndings:
 
         assert run.harness.session.state is State.DONE
         assert run.llm.requests == []
+
+    async def test_reaching_the_cost_cap_wraps_up_like_the_deadline(self, runs: RunFactory) -> None:
+        spend = Usage(input_tokens=1_000, cost_usd=0.03)
+        turns: list[Turn] = [Reply.text("one", usage=spend), Reply.text("two", usage=spend)]
+        run = await runs.start(
+            [*turns, Reply.text("never sent")], budget=BudgetSettings(max_cost=0.05)
+        )
+
+        await run.harness.run()
+
+        [spent] = [event for event in run.events if isinstance(event, BudgetSpent)]
+        assert spent.limit is Limit.COST
+        assert spent.cost_usd == pytest.approx(0.06)
+        assert run.harness.session.state is State.DONE
+        assert (len(run.llm.requests), run.llm.remaining) == (2, 1)
 
     async def test_bad_tool_calls_come_back_as_errors_and_the_run_goes_on(
         self, runs: RunFactory, clock: FakeClock

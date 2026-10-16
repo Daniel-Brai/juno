@@ -6,7 +6,7 @@ from types import TracebackType
 from typing import Any, Self
 
 from juno.adapters.git import GitCheckpointer
-from juno.adapters.llm.anthropic import AnthropicClient
+from juno.adapters.llm.anthropic import AnthropicClient, AnthropicPrices
 from juno.adapters.llm.openrouter import OpenRouterClient
 from juno.adapters.sandboxes.local import LocalSandbox
 from juno.adapters.sandboxes.podman import PodmanSandbox
@@ -75,6 +75,7 @@ class Harness:
             task_id=task.id,
             started_at=now,
             deadline=now + config.budget.total,
+            cost_limit=config.budget.max_cost,
             setup=cls.setup_of(config),
         )
         store = await cls.open_store(paths)
@@ -166,6 +167,12 @@ class Harness:
                 raise RuntimeError("set OPENROUTER_API_KEY to use the openrouter provider")
 
             return OpenRouterClient(model, api_key=key, session_id=session.id)
+
+        if config.budget.max_cost is not None and not AnthropicPrices.knows(model.name):
+            raise ValueError(
+                f"budget.max_cost needs a price for {model.name}, and juno has none; "
+                "drop the cost cap or use a priced model"
+            )
 
         return AnthropicClient(model, compaction=config.flags.compaction)
 

@@ -1,4 +1,4 @@
-from juno.domain.session import State
+from juno.domain.session import Limit, State
 from juno.domain.values import (
     Checkpoint,
     Job,
@@ -70,6 +70,11 @@ class SessionResumed(Event):
     jobs_busy_s: float
     paused_s: float
     deadline: float
+
+
+class BudgetSpent(Event):
+    limit: Limit
+    cost_usd: float
 
 
 class SessionEnded(Event):

@@ -1,7 +1,14 @@
 import pytest
 
 from fakes.llm import Reply
-from juno.domain.session import InvalidHistory, InvalidTransition, Session, State, Trigger
+from juno.domain.session import (
+    InvalidHistory,
+    InvalidTransition,
+    Limit,
+    Session,
+    State,
+    Trigger,
+)
 from juno.domain.values import Role, ToolResult, Usage
 
 TABLE = [
@@ -111,6 +118,22 @@ class TestBudget:
         session.paused_s = 600
 
         assert session.elapsed(session.started_at + 1_800) == 1_200
+
+    def test_the_first_limit_reached_ends_the_budget(self, session: Session) -> None:
+        capped = session.model_copy(update={"cost_limit": 0.5})
+
+        assert capped.limit_reached(session.started_at) is None
+        capped.usage = Usage(cost_usd=0.5)
+        assert capped.limit_reached(session.started_at) is Limit.COST
+        assert capped.limit_reached(session.deadline) is Limit.TIME
+        assert session.limit_reached(session.started_at) is None
+
+    def test_a_finished_session_stops_the_clock_at_its_last_save(self, session: Session) -> None:
+        session.fire(Trigger.START)
+        session.fire(Trigger.FATAL)
+        session.touch(session.started_at + 900)
+
+        assert session.elapsed(session.started_at + 86_400) == 900
 
     def test_downtime_moves_the_deadline(self, session: Session) -> None:
         deadline = session.deadline

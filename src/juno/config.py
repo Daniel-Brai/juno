@@ -56,6 +56,37 @@ class Durations:
 type Seconds = Annotated[float, BeforeValidator(Durations.coerce), Field(gt=0)]
 
 
+class DottedKeys:
+    @classmethod
+    def nest(cls, data: Mapping[str, Any]) -> dict[str, Any]:
+        nested: dict[str, Any] = {}
+
+        for key, value in data.items():
+            *parents, leaf = key.split(".")
+            branch = {leaf: cls.nest(value) if isinstance(value, Mapping) else value}
+
+            for parent in reversed(parents):
+                branch = {parent: branch}
+
+            nested = cls.merge(nested, branch)
+
+        return nested
+
+    @classmethod
+    def merge(cls, base: Mapping[str, Any], extra: Mapping[str, Any]) -> dict[str, Any]:
+        merged = dict(base)
+
+        for key, value in extra.items():
+            current = merged.get(key)
+
+            if isinstance(value, Mapping) and isinstance(current, Mapping):
+                merged[key] = cls.merge(current, value)
+            else:
+                merged[key] = value
+
+        return merged
+
+
 class Section(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -90,39 +121,10 @@ class Flags(Section):
     @model_validator(mode="before")
     @classmethod
     def _expand_dotted_keys(cls, data: Any) -> Any:
-        return cls._nest(data) if isinstance(data, Mapping) else data
+        return DottedKeys.nest(data) if isinstance(data, Mapping) else data
 
     def with_overrides(self, overrides: Mapping[str, Any]) -> Flags:
-        return Flags.model_validate(self._merge(self.model_dump(), self._nest(overrides)))
-
-    @classmethod
-    def _nest(cls, data: Mapping[str, Any]) -> dict[str, Any]:
-        nested: dict[str, Any] = {}
-
-        for key, value in data.items():
-            *parents, leaf = key.split(".")
-            branch = {leaf: cls._nest(value) if isinstance(value, Mapping) else value}
-
-            for parent in reversed(parents):
-                branch = {parent: branch}
-
-            nested = cls._merge(nested, branch)
-
-        return nested
-
-    @classmethod
-    def _merge(cls, base: Mapping[str, Any], extra: Mapping[str, Any]) -> dict[str, Any]:
-        merged = dict(base)
-
-        for key, value in extra.items():
-            current = merged.get(key)
-
-            if isinstance(value, Mapping) and isinstance(current, Mapping):
-                merged[key] = cls._merge(current, value)
-            else:
-                merged[key] = value
-
-        return merged
+        return Flags.model_validate(DottedKeys.merge(self.model_dump(), DottedKeys.nest(overrides)))
 
 
 class ModelSettings(Section):
@@ -134,6 +136,7 @@ class ModelSettings(Section):
 
 class BudgetSettings(Section):
     total: Seconds = 86_400
+    max_cost: float | None = Field(default=None, gt=0)
     bash_timeout: Seconds = 600
     max_jobs: int = Field(default=4, ge=1)
 

@@ -6,7 +6,7 @@ import pytest
 import respx
 from anthropic.types.beta import BetaMessage
 
-from juno.adapters.llm.anthropic import AnthropicClient
+from juno.adapters.llm.anthropic import AnthropicClient, AnthropicPrices
 from juno.adapters.llm.openrouter import OpenRouterClient, OpenRouterError
 from juno.config import ModelSettings
 from juno.domain.values import Message, ModelRequest, Role, StopReason, ToolSpec, Usage
@@ -91,9 +91,29 @@ class TestAnthropicClient:
         assert reply.stop_reason is StopReason.TOOL_USE
         assert reply.content[0] == {"type": "thinking", "thinking": "", "signature": "sig"}
         assert [call.name for call in reply.tool_calls()] == ["bash"]
-        assert reply.usage == Usage(
+        assert reply.usage.model_copy(update={"cost_usd": 0}) == Usage(
             input_tokens=12, output_tokens=30, cache_read_input_tokens=4_000
         )
+        assert reply.usage.cost_usd == pytest.approx((12 * 4 + 30 * 20 + 4_000 * 0.2) / 1e6)
+
+
+class TestAnthropicPrices:
+    def test_cache_writes_cost_double_input_for_the_hour_ttl(self) -> None:
+        usage = Usage(input_tokens=1_000_000, cache_creation_input_tokens=1_000_000)
+
+        assert AnthropicPrices.cost("claude-sonnet-5-5", usage) == pytest.approx(2 + 4)
+
+    def test_haiku_charges_more_above_100k_prompt_tokens(self) -> None:
+        small = Usage(input_tokens=100_000, output_tokens=1_000)
+        large = Usage(input_tokens=100_001, output_tokens=1_000)
+
+        assert AnthropicPrices.cost("claude-haiku-5-5", small) == pytest.approx(0.0105)
+        assert AnthropicPrices.cost("claude-haiku-5-5", large) == pytest.approx(0.0525005)
+
+    def test_unknown_models_cost_nothing_and_are_reported(self) -> None:
+        assert AnthropicPrices.cost("claude-future-9", Usage(input_tokens=10)) == 0
+        assert not AnthropicPrices.knows("claude-future-9")
+        assert AnthropicPrices.knows("claude-opus-5-5")
 
 
 class TestOpenRouterTranslation:
