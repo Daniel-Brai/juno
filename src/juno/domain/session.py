@@ -67,6 +67,7 @@ class Session(BaseModel):
     deadline: float
     cost_limit: float | None = None
     state: State = State.STARTING
+    failure: str | None = None
     last_active_at: float | None = None
     paused_s: float = 0.0
     setup: dict[str, Any] = Field(default_factory=dict)
@@ -130,6 +131,10 @@ class Session(BaseModel):
                 changed.add(f"{prefix}{key}")
 
         return changed
+
+    def fail(self, reason: str) -> None:
+        self.fire(Trigger.FATAL)
+        self.failure = reason
 
     def fire(self, trigger: Trigger) -> State:
         if self.terminal:

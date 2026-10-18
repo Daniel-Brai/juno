@@ -79,5 +79,6 @@ class BudgetSpent(Event):
 
 class SessionEnded(Event):
     state: State
+    failure: str | None = None
     usage: Usage
     handler_failures: int = 0

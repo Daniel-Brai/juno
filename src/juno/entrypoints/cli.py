@@ -37,6 +37,7 @@ class JunoCli:
         self.app.command(self.run)
         self.app.command(self.resume)
         self.app.command(self.status)
+        self.app.command(self.stop)
         self.app.command(self.grade)
         self.evaluate = App(
             name="eval", help="Run experiments, follow them and report the results."
@@ -114,7 +115,7 @@ class JunoCli:
             config=config, task=loaded, paths=paths, adapters=Adapters()
         ) as harness:
             print(f"juno run {harness.session.id} in {paths.root}", file=sys.stderr)
-            await harness.run()
+            await self.drive(harness, paths)
 
         return self.finish(await Harness.report(paths))
 
@@ -137,7 +138,7 @@ class JunoCli:
         async with await Harness.resume(
             config=config, task=TaskFolder.from_run(paths), paths=paths, adapters=Adapters()
         ) as harness:
-            await harness.run()
+            await self.drive(harness, paths)
 
         return self.finish(await Harness.report(paths))
 
@@ -152,6 +153,29 @@ class JunoCli:
 
         report = await Harness.report(RunPaths(root=run))
         print(self.describe(report, time.time()))
+        return 0
+
+    async def stop(self, run: Path, /) -> int:
+        """Remove the sandbox of the run in folder RUN and stop its background jobs.
+
+        An unfinished run keeps its history and can still be continued with juno resume.
+
+        Parameters
+        ----------
+        run
+            Run folder created by juno run.
+        """
+
+        paths = RunPaths(root=run)
+        session = await Harness.stop(
+            task=TaskFolder.from_run(paths), paths=paths, adapters=Adapters()
+        )
+
+        if session.terminal:
+            print(f"removed the sandbox of finished run {session.id}")
+        else:
+            print(f"stopped run {session.id}; juno resume {run} continues it")
+
         return 0
 
     def grade(self, run: Path, /, *, answers: Path) -> int:
@@ -228,6 +252,18 @@ class JunoCli:
 
         print(self.write_report(Experiment.load(manifest)))
         return 0
+
+    @staticmethod
+    async def drive(harness: Harness, paths: RunPaths) -> None:
+        try:
+            await harness.run()
+        except Exception:
+            print(
+                f"juno: the run stopped on an error and its sandbox is still up; "
+                f"juno resume {paths.root} continues it, juno stop {paths.root} removes it",
+                file=sys.stderr,
+            )
+            raise
 
     @staticmethod
     def write_report(experiment: Experiment) -> str:
@@ -328,7 +364,7 @@ class JunoCli:
         running = [job for job in report.jobs if job.state == "running"]
         lines = [
             f"run:         {session.id} ({session.task_id})",
-            f"state:       {session.state}",
+            f"state:       {session.state}" + (f" ({session.failure})" if session.failure else ""),
             f"elapsed:     {Durations.format(session.elapsed(now))}",
             f"remaining:   {Durations.format(session.remaining(now))}",
             f"best:        {best.val_score if best else 'none yet'}"

@@ -82,13 +82,32 @@ class TestAblation:
         assert again.calls == []
         assert all(outcome.attempts == 0 and outcome.grade for outcome in rerun)
 
+    async def test_a_rejected_run_fails_once_and_is_not_retried(self, tmp_path: Path) -> None:
+        manifest = ExperimentFiles.experiment(tmp_path)
+        manifest.write_text(MANIFEST.replace("seeds = 3", "seeds = 1"))
+        launcher = ScriptedLauncher(reject=True)
+
+        outcomes = await EvalRunner(Experiment.load(manifest), launcher).run()
+
+        assert [(outcome.state, outcome.exit_codes) for outcome in outcomes] == [
+            (State.FAILED, (0,))
+        ] * 4
+        assert [kind for kind, *_ in launcher.calls] == ["start"] * 4
+        session = RunFolder(outcomes[0].plan.folder).session()
+        assert session is not None and session.failure == (
+            "openrouter rejected the request with 401: bad key"
+        )
+
     async def test_unfinished_runs_are_listed_not_scored(self, tmp_path: Path) -> None:
         manifest = ExperimentFiles.experiment(tmp_path)
         manifest.write_text(MANIFEST.replace("seeds = 3", "seeds = 1\nretries = 0"))
         experiment = Experiment.load(manifest)
 
-        await EvalRunner(experiment, ScriptedLauncher(crash_first=True)).run()
+        launcher = ScriptedLauncher(crash_first=True)
+        await EvalRunner(experiment, launcher).run()
         scorecard = Scorecard(experiment)
+
+        assert sorted(kind for kind, *_ in launcher.calls) == ["start"] * 4 + ["stop"] * 4
 
         assert scorecard.collect() == []
         assert scorecard.skipped[0] == "base/alpha/seed-1 has not finished"
@@ -129,6 +148,9 @@ class HangingLauncher:
 
     async def resume(self, plan: RunPlan) -> int:
         return await self.start(plan, ())
+
+    async def stop(self, plan: RunPlan) -> int:
+        return 0
 
 
 class SpendingRunner(EvalRunner):
@@ -228,6 +250,7 @@ class TestJunoProcess:
             "sandbox.gpus=[2]",
         ]
         assert JunoProcess(["juno"]).resume_argv(plan) == ["juno", "resume", str(plan.folder)]
+        assert JunoProcess(["juno"]).stop_argv(plan) == ["juno", "stop", str(plan.folder)]
 
     async def test_output_goes_to_the_run_log(self, tmp_path: Path) -> None:
         plan = self.plan(tmp_path)

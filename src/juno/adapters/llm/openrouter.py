@@ -15,6 +15,7 @@ from juno.domain.values import (
     ToolSpec,
     Usage,
 )
+from juno.ports import ModelRejected
 
 
 class OpenRouterError(Exception):
@@ -25,6 +26,7 @@ class OpenRouterClient:
     URL: ClassVar[str] = "https://openrouter.ai/api/v1/chat/completions"
     REASONING: ClassVar[str] = "openrouter_reasoning"
     RETRY_STATUSES: ClassVar[frozenset[int]] = frozenset({408, 429, 500, 502, 503, 504})
+    FATAL_STATUSES: ClassVar[frozenset[int]] = frozenset({400, 401, 402, 403, 404})
     ATTEMPTS: ClassVar[int] = 5
     BACKOFF_S: ClassVar[float] = 2.0
     STOP_REASONS: ClassVar[dict[str, StopReason]] = {
@@ -74,7 +76,13 @@ class OpenRouterClient:
         body = await self._post(self.payload(request))
 
         if "error" in body:
-            raise OpenRouterError(f"openrouter error: {body['error']}")
+            error = body["error"]
+            code = error.get("code") if isinstance(error, dict) else None
+
+            if code in self.FATAL_STATUSES:
+                raise ModelRejected(self.rejection(code, error))
+
+            raise OpenRouterError(f"openrouter error: {error}")
 
         return self.reply(body)
 
@@ -198,6 +206,20 @@ class OpenRouterClient:
             cost_usd=float(usage.get("cost") or 0.0),
         )
 
+    @staticmethod
+    def rejection(status: int, error: object) -> str:
+        message = error.get("message") if isinstance(error, dict) else None
+        return f"openrouter rejected the request with {status}: {message or 'no message'}"
+
+    @staticmethod
+    def _error(response: httpx.Response) -> object:
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+
+        return body.get("error") if isinstance(body, dict) else None
+
     async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         for attempt in range(self.ATTEMPTS):
             try:
@@ -206,6 +228,9 @@ class OpenRouterClient:
                 if attempt == self.ATTEMPTS - 1:
                     raise
             else:
+                if response.status_code in self.FATAL_STATUSES:
+                    raise ModelRejected(self.rejection(response.status_code, self._error(response)))
+
                 if response.status_code not in self.RETRY_STATUSES:
                     response.raise_for_status()
                     body: dict[str, Any] = response.json()

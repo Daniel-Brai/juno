@@ -4,12 +4,14 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from anthropic import AsyncAnthropic
 from anthropic.types.beta import BetaMessage
 
 from juno.adapters.llm.anthropic import AnthropicClient, AnthropicPrices
 from juno.adapters.llm.openrouter import OpenRouterClient, OpenRouterError
 from juno.config import ModelSettings
 from juno.domain.values import Message, ModelRequest, Role, StopReason, ToolSpec, Usage
+from juno.ports import ModelRejected
 
 pytestmark = pytest.mark.anyio
 
@@ -95,6 +97,26 @@ class TestAnthropicClient:
             input_tokens=12, output_tokens=30, cache_read_input_tokens=4_000
         )
         assert reply.usage.cost_usd == pytest.approx((12 * 4 + 30 * 20 + 4_000 * 0.2) / 1e6)
+
+
+class TestAnthropicRejections:
+    @respx.mock
+    async def test_a_bad_key_raises_model_rejected(self) -> None:
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                401,
+                json={
+                    "type": "error",
+                    "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+                },
+            )
+        )
+        client = AnthropicClient(OPUS, client=AsyncAnthropic(api_key="bad", max_retries=0))
+
+        with pytest.raises(ModelRejected, match="anthropic rejected the request with 401"):
+            await client.complete(REQUEST)
+
+        await client.close()
 
 
 class TestAnthropicPrices:
@@ -252,8 +274,34 @@ class TestOpenRouterTransport:
         assert route.calls.last.request.headers["Authorization"] == "Bearer secret"
 
     @respx.mock
-    async def test_client_errors_are_not_retried(self) -> None:
-        route = respx.post(OpenRouterClient.URL).mock(return_value=httpx.Response(400, json={}))
+    @pytest.mark.parametrize("status", [400, 401, 402, 403, 404])
+    async def test_rejections_are_not_retried(self, status: int) -> None:
+        body = {"error": {"message": "No auth credentials found", "code": status}}
+        route = respx.post(OpenRouterClient.URL).mock(
+            return_value=httpx.Response(status, json=body)
+        )
+        client = OpenRouterClient(FLASH, api_key="secret")
+
+        with pytest.raises(ModelRejected, match=f"rejected the request with {status}: No auth"):
+            await client.complete(REQUEST)
+
+        await client.close()
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_a_rejection_inside_a_200_body_is_fatal_too(self) -> None:
+        body = {"error": {"message": "Insufficient credits", "code": 402}}
+        respx.post(OpenRouterClient.URL).mock(return_value=httpx.Response(200, json=body))
+        client = OpenRouterClient(FLASH, api_key="secret")
+
+        with pytest.raises(ModelRejected, match="402: Insufficient credits"):
+            await client.complete(REQUEST)
+
+        await client.close()
+
+    @respx.mock
+    async def test_other_client_errors_raise_without_retrying(self) -> None:
+        route = respx.post(OpenRouterClient.URL).mock(return_value=httpx.Response(422, json={}))
         client = OpenRouterClient(FLASH, api_key="secret")
 
         with pytest.raises(httpx.HTTPStatusError):

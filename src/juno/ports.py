@@ -21,6 +21,10 @@ from juno.domain.values import (
 )
 
 
+class ModelRejected(Exception):
+    pass
+
+
 class LlmClient(Protocol):
     async def complete(self, request: ModelRequest) -> ModelReply: ...
 

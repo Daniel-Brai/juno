@@ -8,6 +8,7 @@ from juno.bootstrap import Adapters, Harness
 from juno.config import BudgetSettings, Flags, HarnessConfig, SandboxSettings
 from juno.domain.values import ModelReply, ModelRequest, RunPaths, Usage
 from juno.eval.experiment import RunPlan
+from juno.ports import ModelRejected
 from juno.tasks import TaskFolder
 
 ROWS = 10
@@ -78,10 +79,13 @@ class Finish:
 
 
 class ScriptedLauncher:
-    def __init__(self, *, crash_first: bool = False, cost_per_call: float = 0.0) -> None:
+    def __init__(
+        self, *, crash_first: bool = False, cost_per_call: float = 0.0, reject: bool = False
+    ) -> None:
         self.calls: list[tuple[str, str, tuple[int, ...]]] = []
         self._crash_first = crash_first
         self._cost = cost_per_call
+        self._reject = reject
 
     async def start(self, plan: RunPlan, gpus: tuple[int, ...]) -> int:
         self.calls.append(("start", plan.folder.name, gpus))
@@ -97,6 +101,12 @@ class ScriptedLauncher:
         self.calls.append(("resume", plan.folder.name, ()))
         clock = FakeClock()
         return await self._run(plan, Harness.resume, self.turns(plan, clock)[2:], clock)
+
+    async def stop(self, plan: RunPlan) -> int:
+        self.calls.append(("stop", plan.folder.name, ()))
+        paths = RunPaths(root=plan.folder)
+        await Harness.stop(task=TaskFolder.from_run(paths), paths=paths, adapters=Adapters())
+        return 0
 
     def turns(self, plan: RunPlan, clock: FakeClock) -> list[Turn]:
         accuracy = ACCURACY[plan.arm, plan.task_id][plan.seed - 1]
@@ -117,8 +127,8 @@ class ScriptedLauncher:
 
         return [*turns, Finish(clock, usage)]
 
-    @staticmethod
     async def _run(
+        self,
         plan: RunPlan,
         opener: Callable[..., Awaitable[Harness]],
         turns: list[Turn],
@@ -133,7 +143,7 @@ class ScriptedLauncher:
             config=config,
             task=TaskFolder.from_run(RunPaths(root=plan.folder)),
             paths=RunPaths(root=plan.folder),
-            adapters=Adapters(llm=ScriptedLlm(turns), clock=clock, probe=FakeProbe()),
+            adapters=Adapters(llm=self._llm(turns), clock=clock, probe=FakeProbe()),
         )
 
         try:
@@ -144,6 +154,14 @@ class ScriptedLauncher:
             await harness.close()
 
         return 0
+
+    def _llm(self, turns: list[Turn]) -> ScriptedLlm:
+        llm = ScriptedLlm(turns)
+
+        if self._reject:
+            llm.fail_at(0, ModelRejected("openrouter rejected the request with 401: bad key"))
+
+        return llm
 
     @staticmethod
     def _write(path: str, text: str, usage: Usage) -> ModelReply:

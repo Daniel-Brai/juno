@@ -2,11 +2,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from anthropic import AsyncAnthropic
+from anthropic import (
+    AsyncAnthropic,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from anthropic.types.beta import BetaMessage
 
 from juno.config import ModelSettings
 from juno.domain.values import ModelReply, ModelRequest, StopReason, Usage
+from juno.ports import ModelRejected
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,8 +109,18 @@ class AnthropicClient:
         return params
 
     async def complete(self, request: ModelRequest) -> ModelReply:
-        async with self._client.beta.messages.stream(**self.params(request)) as stream:
-            message = await stream.get_final_message()
+        try:
+            async with self._client.beta.messages.stream(**self.params(request)) as stream:
+                message = await stream.get_final_message()
+        except (
+            AuthenticationError,
+            PermissionDeniedError,
+            NotFoundError,
+            BadRequestError,
+        ) as error:
+            raise ModelRejected(
+                f"anthropic rejected the request with {error.status_code}: {error.message}"
+            ) from error
 
         return self.reply(message)
 

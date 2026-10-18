@@ -1,7 +1,8 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
+import structlog
 
 from fakes.clock import FakeClock
 from fakes.probe import FakeProbe
@@ -27,6 +28,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         for marker, option in GATED_MARKERS.items():
             if marker in item.keywords and not config.getoption(option):
                 item.add_marker(pytest.mark.skip(reason=f"needs --{option}"))
+
+
+@pytest.fixture(autouse=True)
+def fresh_logging() -> Iterator[None]:
+    yield
+    structlog.reset_defaults()
 
 
 @pytest.fixture

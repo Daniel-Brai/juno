@@ -191,6 +191,21 @@ class Harness:
             data=task.data_dir,
         )
 
+    @classmethod
+    async def stop(cls, *, task: Task, paths: RunPaths, adapters: Adapters) -> Session:
+        report = await cls.report(paths)
+        session = report.session
+        config = HarnessConfig(**session.setup)
+        sandbox = adapters.sandbox or cls.sandbox_for(config, paths, task, session)
+
+        for job in report.jobs:
+            if job.state == "running":
+                with contextlib.suppress(Exception):
+                    await sandbox.kill_group(job.pgid)
+
+        await sandbox.stop()
+        return session
+
     async def run(self) -> Submission | None:
         watcher = asyncio.create_task(self.watchdog.watch())
 

@@ -11,7 +11,7 @@ from juno.domain.events import (
 )
 from juno.domain.session import Session, State, Trigger
 from juno.domain.values import StopReason, Submission, ToolCall, ToolResult
-from juno.ports import Clock, LlmClient
+from juno.ports import Clock, LlmClient, ModelRejected
 from juno.service.bus import MessageBus
 from juno.service.journal import Journal
 from juno.service.prompts import Prompts
@@ -77,6 +77,7 @@ class AgentLoop:
                 session_id=session.id,
                 at=self._clock.now(),
                 state=session.state,
+                failure=session.failure,
                 usage=session.usage,
                 handler_failures=self._bus.failures,
             )
@@ -126,14 +127,21 @@ class AgentLoop:
         request = self.journal.request(session.messages)
         fingerprint = self.journal.fingerprint
         started = self._clock.now()
-        reply = await self._llm.complete(request)
+
+        try:
+            reply = await self._llm.complete(request)
+        except ModelRejected as error:
+            session.fail(str(error))
+            await self.journal.save(session)
+            return
+
         session.append_assistant(reply)
         calls = reply.tool_calls()
 
         if calls:
             session.fire(Trigger.TOOL_USE)
         elif reply.stop_reason is StopReason.REFUSAL:
-            session.fire(Trigger.FATAL)
+            session.fail("the model refused to continue")
         else:
             session.fire(Trigger.END_TURN)
 

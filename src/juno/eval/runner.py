@@ -21,6 +21,8 @@ class Launcher(Protocol):
 
     async def resume(self, plan: RunPlan) -> int: ...
 
+    async def stop(self, plan: RunPlan) -> int: ...
+
 
 class JunoProcess:
     LOG: ClassVar[str] = "runner.log"
@@ -61,11 +63,17 @@ class JunoProcess:
     def resume_argv(self, plan: RunPlan) -> list[str]:
         return [*self._executable, "resume", str(plan.folder)]
 
+    def stop_argv(self, plan: RunPlan) -> list[str]:
+        return [*self._executable, "stop", str(plan.folder)]
+
     async def start(self, plan: RunPlan, gpus: tuple[int, ...]) -> int:
         return await self._spawn(plan, self.start_argv(plan, gpus))
 
     async def resume(self, plan: RunPlan) -> int:
         return await self._spawn(plan, self.resume_argv(plan))
+
+    async def stop(self, plan: RunPlan) -> int:
+        return await self._spawn(plan, self.stop_argv(plan))
 
     async def _spawn(self, plan: RunPlan, argv: list[str]) -> int:
         plan.folder.mkdir(parents=True, exist_ok=True)
@@ -216,6 +224,8 @@ class EvalRunner:
 
                     if session is not None and session.terminal:
                         break
+                if session is not None and not session.terminal:
+                    await self._launcher.stop(plan)
             finally:
                 await self._gpus.give(gpus)
 

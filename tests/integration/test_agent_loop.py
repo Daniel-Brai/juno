@@ -18,6 +18,7 @@ from juno.domain.events import (
 )
 from juno.domain.session import Limit, State
 from juno.domain.values import ModelReply, ModelRequest, RunPaths, StopReason, Task, Usage
+from juno.ports import ModelRejected
 from juno.service.loop import AgentLoop
 
 pytestmark = pytest.mark.anyio
@@ -168,6 +169,20 @@ class TestEndings:
 
         assert run.harness.session.state is State.DONE
         assert run.llm.requests == []
+
+    async def test_a_rejected_request_fails_the_run_with_its_reason(self, runs: RunFactory) -> None:
+        run = await runs.start([Reply.text("never sent")])
+        run.llm.fail_at(
+            0, ModelRejected("anthropic rejected the request with 401: invalid x-api-key")
+        )
+
+        assert await run.harness.run() is None
+
+        session = run.harness.session
+        assert session.state is State.FAILED
+        assert session.failure == "anthropic rejected the request with 401: invalid x-api-key"
+        [ended] = [event for event in run.events if isinstance(event, SessionEnded)]
+        assert ended.failure == session.failure
 
     async def test_reaching_the_cost_cap_wraps_up_like_the_deadline(self, runs: RunFactory) -> None:
         spend = Usage(input_tokens=1_000, cost_usd=0.03)
