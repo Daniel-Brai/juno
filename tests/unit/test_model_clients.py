@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 import httpx
+import httpx2
 import pytest
 import respx
 from anthropic import AsyncAnthropic
@@ -100,23 +101,23 @@ class TestAnthropicClient:
 
 
 class TestAnthropicRejections:
-    @respx.mock
     async def test_a_bad_key_raises_model_rejected(self) -> None:
-        respx.post("https://api.anthropic.com/v1/messages").mock(
-            return_value=httpx.Response(
-                401,
-                json={
-                    "type": "error",
-                    "error": {"type": "authentication_error", "message": "invalid x-api-key"},
-                },
-            )
-        )
-        client = AnthropicClient(OPUS, client=AsyncAnthropic(api_key="bad", max_retries=0))
+        paths: list[str] = []
+
+        def reject(request: httpx2.Request) -> httpx2.Response:
+            paths.append(request.url.path)
+            error = {"type": "authentication_error", "message": "invalid x-api-key"}
+            return httpx2.Response(401, json={"type": "error", "error": error})
+
+        http = httpx2.AsyncClient(transport=httpx2.MockTransport(reject))
+        sdk = AsyncAnthropic(api_key="bad", max_retries=0, http_client=http)
+        client = AnthropicClient(OPUS, client=sdk)
 
         with pytest.raises(ModelRejected, match="anthropic rejected the request with 401"):
             await client.complete(REQUEST)
 
         await client.close()
+        assert paths == ["/v1/messages"]
 
 
 class TestAnthropicPrices:

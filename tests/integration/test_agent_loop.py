@@ -163,7 +163,9 @@ class TestEndings:
         self, runs: RunFactory, clock: FakeClock
     ) -> None:
         run = await runs.start([])
-        clock.advance(run.harness.session.deadline - clock.now())
+        deadline = run.harness.session.deadline
+        assert deadline is not None
+        clock.advance(deadline - clock.now())
 
         await run.harness.run()
 

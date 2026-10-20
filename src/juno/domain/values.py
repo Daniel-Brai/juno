@@ -17,6 +17,12 @@ class Role(StrEnum):
     ASSISTANT = "assistant"
 
 
+class Answer(StrEnum):
+    ONCE = "once"
+    ALWAYS = "always"
+    DENY = "deny"
+
+
 class StopReason(StrEnum):
     END_TURN = "end_turn"
     TOOL_USE = "tool_use"
@@ -201,10 +207,11 @@ class Task(Value):
 
 class RunPaths(Value):
     root: Path
+    project: Path | None = None
 
     @property
     def workspace(self) -> Path:
-        return self.root / "workspace"
+        return self.project or self.root / "workspace"
 
     @property
     def logs(self) -> Path:

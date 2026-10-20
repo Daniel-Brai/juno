@@ -1,10 +1,16 @@
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from juno.config import Durations
 from juno.domain.values import Direction, Task
 
 
-class Prompts:
+class Prompts(Protocol):
+    def system(self) -> str: ...
+
+    def opening(self) -> str | None: ...
+
+
+class TaskPrompts:
     SYSTEM: ClassVar[str] = (
         "You are an autonomous machine learning engineer working alone in a Linux workspace. "
         "Solve the task end to end: explore the data, build a pipeline, train, validate and "
@@ -27,7 +33,7 @@ class Prompts:
     def system(self) -> str:
         return self.SYSTEM
 
-    def task_message(self) -> str:
+    def opening(self) -> str:
         better = "lower" if self._task.direction is Direction.MINIMIZE else "higher"
 
         return (
@@ -39,5 +45,32 @@ class Prompts:
             f"Time budget: {Durations.format(self._budget_s)}"
         )
 
-    def continue_message(self, remaining_s: float) -> str:
-        return f"Continue working. {Durations.format(remaining_s)} remaining."
+
+class ChatPrompts:
+    SYSTEM: ClassVar[str] = (
+        "You are a software engineer working in the user's project through tools. Read the "
+        "code before changing it, make the smallest change that does the job, and run the "
+        "project's checks or tests when they exist.\n\n"
+        "How to work:\n"
+        "- Use glob, grep and read to find your way around; use bash for anything else.\n"
+        "- Edit files with the editor tool, never with shell redirection.\n"
+        "- Keep a todo list for work with several steps, and update it as you go.\n"
+        "- Some calls need the user's approval. If one is denied, take that as an answer and "
+        "do not try the same thing another way.\n"
+        "- When you are done, say what changed and what you could not check."
+    )
+
+    def __init__(self, project: str, instructions: str | None) -> None:
+        self._project = project
+        self._instructions = instructions
+
+    def system(self) -> str:
+        parts = [self.SYSTEM, f"The project is in {self._project}."]
+
+        if self._instructions:
+            parts.append(f"Project instructions:\n\n{self._instructions.strip()}")
+
+        return "\n\n".join(parts)
+
+    def opening(self) -> None:
+        return None

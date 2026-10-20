@@ -51,8 +51,10 @@ class TestLifecycle:
             session.fire(trigger)
 
     def test_remaining_time_never_goes_negative(self, session: Session) -> None:
-        assert session.remaining(session.deadline - 60) == 60
-        assert session.remaining(session.deadline + 60) == 0
+        deadline = session.deadline
+        assert deadline is not None
+        assert session.remaining(deadline - 60) == 60
+        assert session.remaining(deadline + 60) == 0
 
 
 class TestHistory:
@@ -125,6 +127,7 @@ class TestBudget:
         assert capped.limit_reached(session.started_at) is None
         capped.usage = Usage(cost_usd=0.5)
         assert capped.limit_reached(session.started_at) is Limit.COST
+        assert session.deadline is not None
         assert capped.limit_reached(session.deadline) is Limit.TIME
         assert session.limit_reached(session.started_at) is None
 
@@ -137,6 +140,7 @@ class TestBudget:
 
     def test_downtime_moves_the_deadline(self, session: Session) -> None:
         deadline = session.deadline
+        assert deadline is not None
         session.touch(session.started_at + 100)
 
         downtime = session.pause_for_downtime(session.started_at + 400)
@@ -179,6 +183,7 @@ class TestSetup:
 class TestBusyDowntime:
     def test_only_idle_downtime_is_paused(self, session: Session) -> None:
         deadline = session.deadline
+        assert deadline is not None
         session.touch(session.started_at)
 
         paused = session.pause_for_downtime(session.started_at + 300, busy_s=100)

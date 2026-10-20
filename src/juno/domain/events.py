@@ -18,7 +18,7 @@ class Event(Value):
 
 class SessionStarted(Event):
     task_id: str
-    deadline: float
+    deadline: float | None
 
 
 class ModelCalled(Event):
@@ -29,6 +29,13 @@ class ModelCalled(Event):
 
 class ToolStarted(Event):
     call: ToolCall
+
+
+class ApprovalDecided(Event):
+    call: ToolCall
+    allowed: bool
+    asked: bool
+    reason: str
 
 
 class ToolFinished(Event):
@@ -48,7 +55,7 @@ class CheckpointTaken(Event):
 
 
 class TurnContinued(Event):
-    remaining_s: float
+    remaining_s: float | None
 
 
 class Compacted(Event):
@@ -69,7 +76,7 @@ class SessionResumed(Event):
     downtime_s: float
     jobs_busy_s: float
     paused_s: float
-    deadline: float
+    deadline: float | None
 
 
 class BudgetSpent(Event):

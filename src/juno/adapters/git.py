@@ -14,12 +14,15 @@ class GitCheckpointer:
         "commit.gpgsign=false",
     )
 
-    def __init__(self, workspace: Path, max_file_bytes: int = 50 * 1024**2) -> None:
+    def __init__(
+        self, workspace: Path, *, git_dir: Path | None = None, max_file_bytes: int = 50 * 1024**2
+    ) -> None:
         self._workspace = workspace
+        self._git_dir = git_dir
         self._max_file_bytes = max_file_bytes
 
     async def checkpoint(self, message: str) -> str | None:
-        if not (self._workspace / ".git").exists():
+        if not (self._git_dir or self._workspace / ".git").exists():
             await self._git("init", "-q")
 
         paths = [path for path in await self._changed_paths() if self._small_enough(path)]
@@ -54,9 +57,15 @@ class GitCheckpointer:
         return not path.is_file() or path.stat().st_size <= self._max_file_bytes
 
     async def _git(self, *args: str, stdin: str | None = None) -> str:
+        location = (
+            ("--git-dir", str(self._git_dir), "--work-tree", str(self._workspace))
+            if self._git_dir is not None
+            else ()
+        )
         process = await asyncio.create_subprocess_exec(
             "git",
             *self.IDENTITY,
+            *location,
             *args,
             cwd=self._workspace,
             stdin=PIPE if stdin is not None else DEVNULL,

@@ -13,6 +13,7 @@ from juno.domain.session import Session, State, Trigger
 from juno.domain.values import StopReason, Submission, ToolCall, ToolResult
 from juno.ports import Clock, LlmClient, ModelRejected
 from juno.service.bus import MessageBus
+from juno.service.drivers import TurnDriver
 from juno.service.journal import Journal
 from juno.service.prompts import Prompts
 
@@ -37,6 +38,7 @@ class AgentLoop:
         clock: Clock,
         bus: MessageBus,
         prompts: Prompts,
+        driver: TurnDriver,
         jobs: Jobs | None = None,
     ) -> None:
         self._llm = llm
@@ -44,16 +46,17 @@ class AgentLoop:
         self._clock = clock
         self._bus = bus
         self._prompts = prompts
+        self._driver = driver
         self._jobs = jobs
 
     async def run(self, session: Session) -> Submission | None:
         if session.terminal:
             return await self.journal.best(session.id)
 
-        if session.state is State.STARTING:
-            await self._start(session)
-        else:
+        if session.state is not State.STARTING:
             await self._recover(session)
+        elif not await self._start(session):
+            return None
 
         while not session.terminal:
             if session.state is State.WRAPPING_UP:
@@ -69,6 +72,9 @@ class AgentLoop:
                         cost_usd=session.usage.cost_usd,
                     )
                 )
+            elif session.state is State.AWAITING_CONTINUE:
+                if not await self._continue(session):
+                    return await self.journal.best(session.id)
             else:
                 await self._turn(session)
 
@@ -84,8 +90,13 @@ class AgentLoop:
         )
         return await self.journal.best(session.id)
 
-    async def _start(self, session: Session) -> None:
-        session.append_user(self._prompts.task_message())
+    async def _start(self, session: Session) -> bool:
+        opening = self._prompts.opening() or await self._driver.next_message(session)
+
+        if opening is None:
+            return False
+
+        session.append_user(opening)
         session.fire(Trigger.START)
         await self.journal.save(session)
         await self._bus.publish(
@@ -96,6 +107,7 @@ class AgentLoop:
                 deadline=session.deadline,
             )
         )
+        return True
 
     async def _recover(self, session: Session) -> None:
         now = self._clock.now()
@@ -118,9 +130,7 @@ class AgentLoop:
             )
         )
 
-        if session.state is State.AWAITING_CONTINUE:
-            await self._continue(session)
-        elif calls := session.pending_tool_calls():
+        if calls := session.pending_tool_calls():
             await self._finish_tools(session, calls)
 
     async def _turn(self, session: Session) -> None:
@@ -161,8 +171,6 @@ class AgentLoop:
             await self.journal.save(session)
         elif calls:
             await self._finish_tools(session, calls)
-        elif session.state is State.AWAITING_CONTINUE:
-            await self._continue(session)
 
     @classmethod
     def cut_off(cls, call: ToolCall) -> ToolResult:
@@ -172,20 +180,20 @@ class AgentLoop:
         session.append_tool_results(await self.journal.run_tools(session.id, calls))
         await self.journal.save(session)
 
-    async def _continue(self, session: Session) -> None:
-        remaining = session.remaining(self._clock.now())
+    async def _continue(self, session: Session) -> bool:
+        message = await self._driver.next_message(session)
 
-        if remaining <= 0:
-            session.fire(Trigger.BUDGET_SPENT)
-            await self.journal.save(session)
-            return
+        if message is None:
+            return False
 
-        session.append_user(self._prompts.continue_message(remaining))
+        session.append_user(message)
         session.fire(Trigger.CONTINUE)
         await self.journal.save(session)
+        remaining = None if session.open_ended else session.remaining(self._clock.now())
         await self._bus.publish(
             TurnContinued(session_id=session.id, at=self._clock.now(), remaining_s=remaining)
         )
+        return True
 
     async def _wrap_up(self, session: Session) -> None:
         if self._jobs is not None:

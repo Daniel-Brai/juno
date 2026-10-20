@@ -39,6 +39,8 @@ class SystemTools:
         ] or ["GPU: none detected"]
         lines += [
             f"Elapsed: {Durations.format(self._session.elapsed(now))}",
-            f"Remaining: {Durations.format(self._session.remaining(now))}",
+            "Remaining: no time limit"
+            if self._session.open_ended
+            else f"Remaining: {Durations.format(self._session.remaining(now))}",
         ]
         return "\n".join(lines)

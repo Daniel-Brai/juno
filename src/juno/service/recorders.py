@@ -34,15 +34,22 @@ class EventRecorder:
 class CheckpointRecorder:
     TRIGGERS: tuple[type[Event], ...] = (SubmissionRegistered, TurnContinued, SessionEnded)
 
-    def __init__(self, checkpointer: Checkpointer, context: RunContext) -> None:
+    def __init__(
+        self,
+        checkpointer: Checkpointer,
+        context: RunContext,
+        *,
+        triggers: tuple[type[Event], ...] = TRIGGERS,
+    ) -> None:
         self._checkpointer = checkpointer
+        self._triggers = triggers
         self._units = context.units
         self._bus = context.bus
         self._clock = context.clock
         self._session = context.session
 
     def attach(self) -> None:
-        for trigger in self.TRIGGERS:
+        for trigger in self._triggers:
             self._bus.subscribe(trigger, self.checkpoint)
 
     async def checkpoint(self, event: Event) -> None:

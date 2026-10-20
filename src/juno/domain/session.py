@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from types import MappingProxyType
@@ -64,7 +65,7 @@ class Session(BaseModel):
     task_id: str
     seed: int = 0
     started_at: float
-    deadline: float
+    deadline: float | None = None
     cost_limit: float | None = None
     state: State = State.STARTING
     failure: str | None = None
@@ -78,11 +79,15 @@ class Session(BaseModel):
     def terminal(self) -> bool:
         return self.state in self.TERMINAL
 
+    @property
+    def open_ended(self) -> bool:
+        return self.deadline is None
+
     def remaining(self, now: float) -> float:
-        return max(0.0, self.deadline - now)
+        return math.inf if self.deadline is None else max(0.0, self.deadline - now)
 
     def limit_reached(self, now: float) -> Limit | None:
-        if self.remaining(now) <= 0:
+        if self.deadline is not None and self.remaining(now) <= 0:
             return Limit.TIME
 
         if self.cost_limit is not None and self.usage.cost_usd >= self.cost_limit:
@@ -105,7 +110,10 @@ class Session(BaseModel):
 
     def pause_for_downtime(self, now: float, busy_s: float = 0.0) -> float:
         pause = max(0.0, self.downtime(now) - busy_s)
-        self.deadline += pause
+
+        if self.deadline is not None:
+            self.deadline += pause
+
         self.paused_s += pause
 
         if not self.terminal:

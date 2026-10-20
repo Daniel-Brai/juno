@@ -121,6 +121,7 @@ class TestDowntime:
         ]
         first = await runs.start(turns, paths=paths)
         deadline = first.harness.session.deadline
+        assert deadline is not None
         first.llm.fail_at(1, Crash("killed"))
 
         with pytest.raises(Crash):

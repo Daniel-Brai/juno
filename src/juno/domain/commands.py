@@ -78,3 +78,33 @@ class ListSubmissions(Command):
 
 class QuerySystem(Command):
     pass
+
+
+class FindFiles(Command):
+    pattern: str = Field(
+        min_length=1, description="Glob such as **/*.py or src/*.ts; no slash means any folder."
+    )
+    path: str = Field(default=".", description="Folder to search, relative to the project.")
+
+
+class SearchText(Command):
+    pattern: str = Field(min_length=1, description="Regular expression to search for.")
+    path: str = Field(default=".", description="File or folder to search.")
+    glob: str | None = Field(default=None, description="Only search files matching this glob.")
+    context: int = Field(default=0, ge=0, le=20, description="Lines to show around each match.")
+    ignore_case: bool = False
+
+
+class ReadFile(Command):
+    path: str = Field(description="File to read, relative to the project.")
+    offset: int = Field(default=1, ge=1, description="First line to read, 1-based.")
+    limit: int = Field(default=2_000, ge=1, le=5_000, description="Most lines to read.")
+
+
+class TodoItem(Value):
+    text: str = Field(min_length=1)
+    status: Literal["pending", "in_progress", "done"] = "pending"
+
+
+class UpdateTodos(Command):
+    items: list[TodoItem] = Field(description="The whole list; it replaces the previous one.")

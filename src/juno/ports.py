@@ -6,6 +6,7 @@ from typing import Protocol, Self
 from juno.domain.events import Event
 from juno.domain.session import Session
 from juno.domain.values import (
+    Answer,
     Checkpoint,
     CommandResult,
     Job,
@@ -29,6 +30,10 @@ class LlmClient(Protocol):
     async def complete(self, request: ModelRequest) -> ModelReply: ...
 
     async def close(self) -> None: ...
+
+
+class Approver(Protocol):
+    async def approve(self, call: ToolCall, reason: str, /) -> Answer: ...
 
 
 class Clock(Protocol):
