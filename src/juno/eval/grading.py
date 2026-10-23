@@ -81,11 +81,27 @@ class Table:
 
         return value
 
+    def row(self, row_id: str) -> Row:
+        return Row(table=self, id=row_id)
+
     def single_column(self) -> str:
         if len(self.columns) != 1:
             raise GradingError(f"expected one answer column, found {list(self.columns)}")
 
         return self.columns[0]
+
+
+@dataclass(frozen=True, slots=True)
+class Row:
+    table: Table
+    id: str
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        return self.table.columns
+
+    def number(self, column: str) -> float:
+        return self.table.number(self.id, column)
 
 
 class Metric(Protocol):
@@ -135,26 +151,24 @@ class LogLoss:
     def score(self, truth: Table, predicted: Table) -> float:
         column = truth.single_column()
         losses = [
-            -math.log(self._probability(truth.rows[row_id][column], row_id, column, predicted))
+            -math.log(self._probability(truth.rows[row_id][column], predicted.row(row_id)))
             for row_id in truth.rows
         ]
         return sum(losses) / len(losses)
 
-    def _probability(self, label: str, row_id: str, column: str, predicted: Table) -> float:
-        if predicted.columns == (column,):
-            positive = self._clip(predicted.number(row_id, column))
+    def _probability(self, label: str, row: Row) -> float:
+        if len(row.columns) == 1:
+            positive = self._clip(row.number(row.columns[0]))
 
             if label not in {"0", "1"}:
                 raise GradingError("one probability column needs 0/1 labels")
 
             return positive if label == "1" else 1 - positive
 
-        if label not in predicted.columns:
+        if label not in row.columns:
             raise GradingError(f"no probability column for class {label!r}")
 
-        probabilities = {
-            name: self._clip(predicted.number(row_id, name)) for name in predicted.columns
-        }
+        probabilities = {name: self._clip(row.number(name)) for name in row.columns}
         return probabilities[label] / sum(probabilities.values())
 
     def _clip(self, value: float) -> float:
@@ -319,10 +333,10 @@ class Grader:
             raise GradingError(f"{run.root} holds no run")
 
         task = run.task()
-        metric = Metrics.get(task.metric)
         answers = Answers(answers_dir, task.direction)
+        scoring = Scoring(Metrics.get(task.metric), answers)
         submissions = run.submissions(session.id)
-        grades = tuple(self._grade_one(run, item, metric, answers) for item in submissions)
+        grades = tuple(scoring.grade(run, item) for item in submissions)
         valid = [grade for grade in grades if grade.test_score is not None]
 
         return RunGrade(
@@ -365,10 +379,13 @@ class Grader:
             (grade for grade in grades if chosen and grade.submission_id == chosen.id), None
         )
 
-    @staticmethod
-    def _grade_one(
-        run: RunFolder, submission: Submission, metric: Metric, answers: Answers
-    ) -> SubmissionGrade:
+
+@dataclass(frozen=True, slots=True)
+class Scoring:
+    metric: Metric
+    answers: Answers
+
+    def grade(self, run: RunFolder, submission: Submission) -> SubmissionGrade:
         base = SubmissionGrade(
             submission_id=submission.id, sha256=submission.sha256, val_score=submission.val_score
         )
@@ -378,13 +395,15 @@ class Grader:
             if not path.is_file():
                 raise GradingError(f"{path.name} is missing from the run folder")
 
-            score = metric.score(answers.truth, Table.read(path).matching(answers.truth))
+            score = self.metric.score(
+                self.answers.truth, Table.read(path).matching(self.answers.truth)
+            )
         except GradingError as error:
             return base.model_copy(update={"error": str(error)})
         except (UnicodeDecodeError, csv.Error) as error:
             return base.model_copy(update={"error": f"unreadable submission: {error}"})
 
-        board = answers.leaderboard
+        board = self.answers.leaderboard
         return base.model_copy(
             update={
                 "test_score": score,

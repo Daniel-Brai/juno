@@ -88,10 +88,10 @@ class StoreRows:
     async def rewrite_first_message(self, paths: RunPaths, content: str) -> None:
         store = await SqliteStore.open(paths.root / "run.db")
 
-        async with store.unit_of_work() as uow:
-            session = await uow.sessions.latest()
+        async with store.transaction() as tx:
+            session = await tx.sessions.latest()
             assert session is not None
-            [first, *_] = await uow.messages.all(session.id)
+            [first, *_] = await tx.messages.all(session.id)
             changed = first.model_copy(
                 update={"message": first.message.model_copy(update={"content": content})}
             )
@@ -99,7 +99,7 @@ class StoreRows:
                 "UPDATE messages SET data_json = ? WHERE session_id = ? AND idx = 0",
                 (changed.model_dump_json(), session.id),
             )
-            await uow.commit()
+            await tx.commit()
 
         await store.close()
 
@@ -157,7 +157,7 @@ class TestKillAndResume:
         assert resumed.harness.session.state is State.DONE
         assert resumed.llm.remaining == 0
 
-        best = await resumed.harness.loop.run(resumed.harness.session)
+        best = await resumed.harness.loop.run()
         assert best is not None and best.val_score == 0.5
 
     async def test_paid_model_calls_are_never_repeated(self, lab: Lab) -> None:
@@ -304,8 +304,8 @@ class TestJobsAcrossRestarts:
             [Reply.tools(("job_queue", {})), Script(clock).finish], paths=paths
         )
 
-        async with resumed.harness.store.unit_of_work() as uow:
-            [job] = await uow.jobs.all(resumed.harness.session.id)
+        async with resumed.harness.store.transaction() as tx:
+            [job] = await tx.jobs.all(resumed.harness.session.id)
 
         os.killpg(job.pgid, signal.SIGKILL)
         await resumed.harness.run()

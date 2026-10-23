@@ -10,9 +10,17 @@ from juno.domain.events import (
     TurnContinued,
 )
 from juno.domain.session import Session, State, Trigger
-from juno.domain.values import StopReason, Submission, ToolCall, ToolResult
-from juno.ports import Clock, LlmClient, ModelRejected
-from juno.service.bus import MessageBus
+from juno.domain.values import (
+    ContentBlock,
+    ModelReply,
+    Role,
+    StopReason,
+    Submission,
+    ToolCall,
+    ToolResult,
+)
+from juno.ports import LlmClient, ModelRejected
+from juno.service.context import RunContext
 from juno.service.drivers import TurnDriver
 from juno.service.journal import Journal
 from juno.service.prompts import Prompts
@@ -29,27 +37,30 @@ class AgentLoop:
         "this tool call was cut off by the output limit and did not run; "
         "resend it with less content per call"
     )
+    STOPPED: ClassVar[str] = "(stopped by the user before replying)"
 
     def __init__(
         self,
         llm: LlmClient,
         journal: Journal,
+        context: RunContext,
         *,
-        clock: Clock,
-        bus: MessageBus,
         prompts: Prompts,
         driver: TurnDriver,
         jobs: Jobs | None = None,
     ) -> None:
-        self._llm = llm
+        self.llm = llm
         self.journal = journal
-        self._clock = clock
-        self._bus = bus
+        self._session = context.session
+        self._clock = context.clock
+        self._bus = context.bus
         self._prompts = prompts
         self._driver = driver
         self._jobs = jobs
 
-    async def run(self, session: Session) -> Submission | None:
+    async def run(self) -> Submission | None:
+        session = self._session
+
         if session.terminal:
             return await self.journal.best(session.id)
 
@@ -139,7 +150,7 @@ class AgentLoop:
         started = self._clock.now()
 
         try:
-            reply = await self._llm.complete(request)
+            reply = await self.llm.complete(request)
         except ModelRejected as error:
             session.fail(str(error))
             await self.journal.save(session)
@@ -171,6 +182,22 @@ class AgentLoop:
             await self.journal.save(session)
         elif calls:
             await self._finish_tools(session, calls)
+
+    async def interrupt(self) -> None:
+        session = self._session
+
+        if session.terminal or session.state is not State.RUNNING:
+            return
+
+        if calls := session.pending_tool_calls():
+            session.append_tool_results(await self.journal.stop_tools(session.id, calls))
+
+        if session.messages and session.messages[-1].role is Role.USER:
+            text: ContentBlock = {"type": "text", "text": self.STOPPED}
+            session.append_assistant(ModelReply(content=[text], stop_reason=StopReason.END_TURN))
+
+        session.fire(Trigger.END_TURN)
+        await self.journal.save(session)
 
     @classmethod
     def cut_off(cls, call: ToolCall) -> ToolResult:

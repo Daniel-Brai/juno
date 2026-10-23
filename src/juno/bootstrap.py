@@ -1,10 +1,11 @@
 import asyncio
 import contextlib
 import os
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, ClassVar, Protocol, Self
 
 from juno.adapters.git import GitCheckpointer
 from juno.adapters.llm.anthropic import AnthropicClient, AnthropicPrices
@@ -32,7 +33,7 @@ from juno.tools.editor import EditorTools
 from juno.tools.jobs import JobTools
 from juno.tools.middleware import ContainErrors, EmitEvents, TruncateOutput
 from juno.tools.permissions import Permissions
-from juno.tools.registry import Middleware, ToolRegistry
+from juno.tools.registry import Middleware, ToolRegistry, Toolset
 from juno.tools.search import SearchTools
 from juno.tools.submissions import SubmissionTools
 from juno.tools.system import SystemTools
@@ -59,6 +60,111 @@ class ChatSetup:
 
 
 @dataclass(frozen=True, slots=True)
+class Opened:
+    config: HarnessConfig
+    paths: RunPaths
+    adapters: Adapters
+    clock: Clock
+    store: SqliteStore
+    session: Session
+    jobs: list[Job] = field(default_factory=list)
+
+
+class Profile(Protocol):
+    task: Task | None
+    todo: TodoTools | None
+    chat: bool
+    log: bool
+
+    def middleware(
+        self, context: RunContext, read_only: Callable[[str], bool], /
+    ) -> list[Middleware]: ...
+
+    def toolsets(
+        self, opened: Opened, context: RunContext, workspace: Workspace, /
+    ) -> list[Toolset]: ...
+
+    def prompts(self, opened: Opened, sandbox: Sandbox, /) -> Prompts: ...
+
+    def driver(self, clock: Clock, /) -> TurnDriver: ...
+
+    def checkpointing(self, paths: RunPaths, /) -> tuple[Checkpointer, tuple[type[Event], ...]]: ...
+
+
+class TaskProfile:
+    def __init__(self, task: Task) -> None:
+        self.task: Task | None = task
+        self.todo: TodoTools | None = None
+        self.chat = False
+        self.log = True
+        self._task = task
+
+    def middleware(
+        self, _context: RunContext, _read_only: Callable[[str], bool], /
+    ) -> list[Middleware]:
+        return []
+
+    def toolsets(
+        self, opened: Opened, context: RunContext, workspace: Workspace, /
+    ) -> list[Toolset]:
+        if not opened.config.flags.tools.submission:
+            return []
+
+        submissions = SubmissionTools(
+            workspace, context, store_dir=opened.paths.submissions, direction=self._task.direction
+        )
+        return [submissions]
+
+    def prompts(self, opened: Opened, sandbox: Sandbox, /) -> Prompts:
+        seen = (
+            self._task.model_copy(update={"data_dir": PodmanSandbox.DATA})
+            if isinstance(sandbox, PodmanSandbox)
+            else self._task
+        )
+        return TaskPrompts(seen, opened.config.budget.total)
+
+    def driver(self, clock: Clock, /) -> TurnDriver:
+        return ContinueDriver(clock)
+
+    def checkpointing(self, paths: RunPaths, /) -> tuple[Checkpointer, tuple[type[Event], ...]]:
+        return GitCheckpointer(paths.workspace), CheckpointRecorder.TRIGGERS
+
+
+class ChatProfile:
+    CHECKPOINTS: ClassVar[str] = "checkpoints.git"
+
+    def __init__(self, setup: ChatSetup) -> None:
+        self.task: Task | None = None
+        self.todo: TodoTools | None = TodoTools()
+        self.chat = True
+        self.log = setup.log
+        self._setup = setup
+
+    def middleware(
+        self, context: RunContext, read_only: Callable[[str], bool], /
+    ) -> list[Middleware]:
+        approvals = Approvals(
+            self._setup.permissions, self._setup.approver, context, read_only=read_only
+        )
+        return [approvals]
+
+    def toolsets(
+        self, _opened: Opened, _context: RunContext, workspace: Workspace, /
+    ) -> list[Toolset]:
+        return [SearchTools(workspace), *([self.todo] if self.todo else [])]
+
+    def prompts(self, opened: Opened, _sandbox: Sandbox, /) -> Prompts:
+        return ChatPrompts(str(opened.paths.workspace), self._setup.instructions)
+
+    def driver(self, _clock: Clock, /) -> TurnDriver:
+        return self._setup.driver
+
+    def checkpointing(self, paths: RunPaths, /) -> tuple[Checkpointer, tuple[type[Event], ...]]:
+        shadow = GitCheckpointer(paths.workspace, git_dir=paths.root / self.CHECKPOINTS)
+        return shadow, (SessionStarted, TurnContinued)
+
+
+@dataclass(frozen=True, slots=True)
 class RunReport:
     session: Session
     best: Submission | None
@@ -81,6 +187,7 @@ class Harness:
     watchdog: MemoryWatchdog
     jobs: JobTools | None
     todo: TodoTools | None = None
+    checkpointer: Checkpointer | None = None
     chat: bool = False
 
     @classmethod
@@ -99,15 +206,16 @@ class Harness:
         store = await cls.open_store(paths)
 
         try:
-            async with store.unit_of_work() as uow:
-                existing = await uow.sessions.latest()
+            async with store.transaction() as tx:
+                existing = await tx.sessions.latest()
 
             if existing is not None:
                 raise FileExistsError(
                     f"{paths.root} already holds run {existing.id}; resume it or use a new folder"
                 )
 
-            return await cls._assemble(config, task, paths, adapters, clock, store, session, [])
+            opened = Opened(config, paths, adapters, clock, store, session)
+            return await cls._assemble(opened, TaskProfile(task))
         except BaseException:
             await store.close()
             raise
@@ -131,9 +239,8 @@ class Harness:
         store = await cls.open_store(paths)
 
         try:
-            return await cls._assemble(
-                config, None, paths, adapters, clock, store, session, [], chat=chat
-            )
+            opened = Opened(config, paths, adapters, clock, store, session)
+            return await cls._assemble(opened, ChatProfile(chat))
         except BaseException:
             await store.close()
             raise
@@ -145,9 +252,9 @@ class Harness:
         store = await cls.open_store(paths)
 
         try:
-            async with store.unit_of_work() as uow:
-                session = await uow.sessions.latest()
-                jobs = await uow.jobs.all(session.id) if session is not None else []
+            async with store.transaction() as tx:
+                session = await tx.sessions.latest()
+                jobs = await tx.jobs.all(session.id) if session is not None else []
 
             if session is None:
                 raise FileNotFoundError(f"no session to resume in {paths.root}")
@@ -161,9 +268,8 @@ class Harness:
                 log=chat.log,
             )
             clock = adapters.clock or SystemClock()
-            harness = await cls._assemble(
-                config, None, paths, adapters, clock, store, session, jobs, chat=chat
-            )
+            opened = Opened(config, paths, adapters, clock, store, session, jobs)
+            harness = await cls._assemble(opened, ChatProfile(chat))
             await harness.loop.journal.restore(session)
 
             if harness.todo is not None:
@@ -181,9 +287,9 @@ class Harness:
         store = await cls.open_store(paths)
 
         try:
-            async with store.unit_of_work() as uow:
-                session = await uow.sessions.latest()
-                jobs = await uow.jobs.all(session.id) if session is not None else []
+            async with store.transaction() as tx:
+                session = await tx.sessions.latest()
+                jobs = await tx.jobs.all(session.id) if session is not None else []
 
             if session is None:
                 raise FileNotFoundError(f"no run to resume in {paths.root}")
@@ -191,9 +297,9 @@ class Harness:
             if changes := session.setup_changes(cls.setup_of(config)):
                 raise SetupChanged(changes)
 
-            harness = await cls._assemble(
-                config, task, paths, adapters, adapters.clock or SystemClock(), store, session, jobs
-            )
+            clock = adapters.clock or SystemClock()
+            opened = Opened(config, paths, adapters, clock, store, session, jobs)
+            harness = await cls._assemble(opened, TaskProfile(task))
             await harness.loop.journal.restore(session)
             return harness
         except BaseException:
@@ -215,18 +321,18 @@ class Harness:
         store = await SqliteStore.open(paths.root / cls.DATABASE)
 
         try:
-            async with store.unit_of_work() as uow:
-                session = await uow.sessions.latest()
+            async with store.transaction() as tx:
+                session = await tx.sessions.latest()
 
                 if session is None:
                     raise FileNotFoundError(f"no run in {paths.root}")
 
-                records = await uow.messages.all(session.id)
+                records = await tx.messages.all(session.id)
                 return RunReport(
                     session=session,
-                    best=await uow.submissions.best(session.id),
-                    jobs=await uow.jobs.all(session.id),
-                    checkpoints=len(await uow.checkpoints.all(session.id)),
+                    best=await tx.submissions.best(session.id),
+                    jobs=await tx.jobs.all(session.id),
+                    checkpoints=len(await tx.checkpoints.all(session.id)),
                     usage=sum((r.usage for r in records if r.usage is not None), Usage()),
                 )
         finally:
@@ -258,7 +364,7 @@ class Harness:
 
     @staticmethod
     def sandbox_for(
-        config: HarnessConfig, paths: RunPaths, task: Task | None, session: Session
+        config: HarnessConfig, *, paths: RunPaths, task: Task | None, session: Session
     ) -> Sandbox:
         if config.sandbox.kind == "local":
             return LocalSandbox(paths.workspace)
@@ -266,8 +372,7 @@ class Harness:
         return PodmanSandbox(
             config.sandbox,
             name=f"juno-{session.id[-12:]}",
-            workspace=paths.workspace,
-            logs=paths.logs,
+            paths=paths,
             data=task.data_dir if task is not None else None,
         )
 
@@ -276,7 +381,9 @@ class Harness:
         report = await cls.report(paths)
         session = report.session
         config = HarnessConfig(**session.setup)
-        sandbox = adapters.sandbox or cls.sandbox_for(config, paths, task, session)
+        sandbox = adapters.sandbox or cls.sandbox_for(
+            config, paths=paths, task=task, session=session
+        )
 
         for job in report.jobs:
             if job.state == "running":
@@ -290,7 +397,7 @@ class Harness:
         watcher = asyncio.create_task(self.watchdog.watch())
 
         try:
-            best = await self.loop.run(self.session)
+            best = await self.loop.run()
         finally:
             watcher.cancel()
 
@@ -303,7 +410,9 @@ class Harness:
         return best
 
     async def close(self) -> None:
-        await self.llm.close()
+        for client in {id(self.llm): self.llm, id(self.loop.llm): self.loop.llm}.values():
+            await client.close()
+
         await self.store.close()
 
     async def __aenter__(self) -> Self:
@@ -325,107 +434,64 @@ class Harness:
         return paths.project
 
     @classmethod
-    async def _assemble(
-        cls,
-        config: HarnessConfig,
-        task: Task | None,
-        paths: RunPaths,
-        adapters: Adapters,
-        clock: Clock,
-        store: SqliteStore,
-        session: Session,
-        stored_jobs: list[Job],
-        *,
-        chat: ChatSetup | None = None,
-    ) -> Harness:
-        units = store.unit_of_work
-        sandbox = adapters.sandbox or cls.sandbox_for(config, paths, task, session)
+    async def _assemble(cls, opened: Opened, profile: Profile) -> Harness:
+        config, paths, adapters, clock = opened.config, opened.paths, opened.adapters, opened.clock
+        transactions = opened.store.transaction
+        sandbox = adapters.sandbox or cls.sandbox_for(
+            config, paths=paths, task=profile.task, session=opened.session
+        )
         await sandbox.start()
 
         probe = adapters.probe or SystemProbe()
         workspace = Workspace(paths.workspace)
         bus = MessageBus()
-        context = RunContext(session=session, clock=clock, units=units, bus=bus)
-        middleware: list[Middleware] = [EmitEvents(context), ContainErrors()]
-
-        if chat is not None:
-            middleware.append(
-                Approvals(
-                    chat.permissions,
-                    chat.approver,
-                    context,
-                    read_only=lambda name: registry.is_read_only(name),
-                )
-            )
-
-        registry = ToolRegistry(middleware=[*middleware, TruncateOutput()])
+        context = RunContext(
+            session=opened.session, clock=clock, transactions=transactions, bus=bus
+        )
+        registry = ToolRegistry(
+            middleware=[
+                EmitEvents(context),
+                ContainErrors(),
+                *profile.middleware(context, lambda name: registry.is_read_only(name)),
+                TruncateOutput(),
+            ]
+        )
         registry.register(
             BashTools(sandbox, context, max_timeout_s=config.budget.bash_timeout),
             EditorTools(workspace),
+            *profile.toolsets(opened, context, workspace),
         )
-        todo: TodoTools | None = None
-
-        if chat is not None:
-            todo = TodoTools()
-            registry.register(SearchTools(workspace), todo)
-
-        jobs: JobTools | None = None
-        flags = config.flags.tools
-
-        if flags.jobs:
-            jobs = JobTools(
+        jobs = (
+            JobTools(
                 sandbox,
                 context,
                 logs_dir=paths.logs,
                 max_running=config.budget.max_jobs,
-                jobs=stored_jobs,
+                jobs=opened.jobs,
             )
+            if config.flags.tools.jobs
+            else None
+        )
+
+        if jobs is not None:
             registry.register(jobs)
 
-        if flags.system:
+        if config.flags.tools.system:
             registry.register(SystemTools(probe, context))
 
-        if flags.submission and task is not None:
-            registry.register(
-                SubmissionTools(
-                    workspace, context, store_dir=paths.submissions, direction=task.direction
-                )
-            )
+        prompts = profile.prompts(opened, sandbox)
+        journal = Journal(transactions, registry=registry, prompts=prompts, clock=clock)
+        EventRecorder(transactions).attach(bus)
 
-        prompts: Prompts
-        driver: TurnDriver
-
-        if chat is not None:
-            prompts = ChatPrompts(str(paths.workspace), chat.instructions)
-            driver = chat.driver
-            checkpointer = GitCheckpointer(paths.workspace, git_dir=paths.root / "checkpoints.git")
-            triggers: tuple[type[Event], ...] = (SessionStarted, TurnContinued)
-        elif task is not None:
-            seen_task = (
-                task.model_copy(update={"data_dir": PodmanSandbox.DATA})
-                if isinstance(sandbox, PodmanSandbox)
-                else task
-            )
-            prompts = TaskPrompts(seen_task, config.budget.total)
-            driver = ContinueDriver(clock)
-            checkpointer = GitCheckpointer(paths.workspace)
-            triggers = CheckpointRecorder.TRIGGERS
-        else:
-            raise ValueError("a run needs a task or a chat setup")
-
-        journal = Journal(units, registry=registry, prompts=prompts, clock=clock)
-
-        EventRecorder(units).attach(bus)
-
-        if chat is None or chat.log:
+        if profile.log:
             LogRecorder().attach(bus)
 
         CacheMonitor(bus, clock).attach()
-        CheckpointRecorder(
-            adapters.checkpointer or checkpointer, context, triggers=triggers
-        ).attach()
+        default_checkpointer, triggers = profile.checkpointing(paths)
+        checkpointer = adapters.checkpointer or default_checkpointer
+        CheckpointRecorder(checkpointer, context, triggers=triggers).attach()
 
-        llm = adapters.llm or cls.llm_for(config, session)
+        llm = adapters.llm or cls.llm_for(config, opened.session)
         watchdog = MemoryWatchdog(
             probe,
             jobs,
@@ -436,23 +502,23 @@ class Harness:
         loop = AgentLoop(
             llm,
             journal,
-            clock=clock,
-            bus=bus,
+            context,
             prompts=prompts,
-            driver=driver,
+            driver=profile.driver(clock),
             jobs=jobs,
         )
 
         return cls(
-            session=session,
+            session=opened.session,
             loop=loop,
             registry=registry,
             bus=bus,
-            store=store,
+            store=opened.store,
             sandbox=sandbox,
             llm=llm,
             watchdog=watchdog,
             jobs=jobs,
-            todo=todo,
-            chat=chat is not None,
+            todo=profile.todo,
+            checkpointer=checkpointer,
+            chat=profile.chat,
         )

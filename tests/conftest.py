@@ -10,7 +10,7 @@ from fakes.run import RunFactory
 from juno.adapters.stores.sqlite import SqliteStore
 from juno.domain.session import Session
 from juno.domain.values import Direction, Message, ModelRequest, Role, RunPaths, Task, ToolSpec
-from juno.ports import UnitOfWorkFactory
+from juno.ports import TransactionFactory
 from juno.service.bus import MessageBus
 from juno.service.context import RunContext
 from juno.tools.workspace import Workspace
@@ -74,12 +74,12 @@ async def store(paths: RunPaths) -> AsyncIterator[SqliteStore]:
 
 
 @pytest.fixture
-async def units(store: SqliteStore, session: Session) -> UnitOfWorkFactory:
-    async with store.unit_of_work() as uow:
-        await uow.sessions.save(session)
-        await uow.commit()
+async def transactions(store: SqliteStore, session: Session) -> TransactionFactory:
+    async with store.transaction() as tx:
+        await tx.sessions.save(session)
+        await tx.commit()
 
-    return store.unit_of_work
+    return store.transaction
 
 
 @pytest.fixture
@@ -89,9 +89,9 @@ def bus() -> MessageBus:
 
 @pytest.fixture
 def context(
-    session: Session, clock: FakeClock, units: UnitOfWorkFactory, bus: MessageBus
+    session: Session, clock: FakeClock, transactions: TransactionFactory, bus: MessageBus
 ) -> RunContext:
-    return RunContext(session=session, clock=clock, units=units, bus=bus)
+    return RunContext(session=session, clock=clock, transactions=transactions, bus=bus)
 
 
 @pytest.fixture

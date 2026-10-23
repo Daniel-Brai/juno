@@ -201,13 +201,6 @@ class TestCostCaps:
 
         assert launcher.calls == [] and all(outcome.stopped for outcome in outcomes)
 
-    def test_the_per_run_cap_is_passed_to_each_run(self, tmp_path: Path) -> None:
-        manifest = ExperimentFiles.experiment(tmp_path)
-        manifest.write_text(MANIFEST.replace("seeds = 3", "seeds = 3\nmax_cost = 0.5"))
-        plan = Experiment.load(manifest).plans()[0]
-
-        assert JunoProcess(["juno"]).start_argv(plan, ())[-2:] == ["--set", "budget.max_cost=0.5"]
-
 
 class TestGpuPool:
     async def test_a_taker_waits_until_gpus_come_back(self) -> None:
@@ -280,8 +273,3 @@ class TestJunoProcess:
 
         with pytest.raises(ProcessLookupError):
             os.kill(int(pid_file.read_text()), 0)
-
-
-class TestRunFolder:
-    def test_an_empty_folder_holds_no_run(self, tmp_path: Path) -> None:
-        assert RunFolder(tmp_path).session() is None

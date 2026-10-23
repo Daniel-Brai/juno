@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from juno.domain.session import Session
-from juno.ports import Clock, UnitOfWorkFactory
+from juno.ports import Clock, TransactionFactory
 from juno.service.bus import MessageBus
 
 
@@ -9,5 +9,5 @@ from juno.service.bus import MessageBus
 class RunContext:
     session: Session
     clock: Clock
-    units: UnitOfWorkFactory
+    transactions: TransactionFactory
     bus: MessageBus

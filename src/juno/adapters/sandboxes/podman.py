@@ -5,7 +5,7 @@ from typing import ClassVar
 
 from juno.adapters.sandboxes.local import LocalSandbox
 from juno.config import SandboxSettings
-from juno.domain.values import Job
+from juno.domain.values import Job, RunPaths
 
 
 class PodmanError(Exception):
@@ -33,15 +33,14 @@ class PodmanSandbox(LocalSandbox):
         settings: SandboxSettings,
         *,
         name: str,
-        workspace: Path,
-        logs: Path,
+        paths: RunPaths,
         data: Path | None = None,
         output_limit: int = 30_000,
     ) -> None:
-        super().__init__(workspace, output_limit)
+        super().__init__(paths.workspace, output_limit)
         self.name = name
         self._settings = settings
-        self._logs = logs
+        self._logs = paths.logs
         self._data = data
         self._incarnation: float | None = None
 

@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -31,6 +32,63 @@ type Effort = Literal["low", "medium", "high", "xhigh", "max"]
 type SandboxKind = Literal["podman", "local"]
 type LogFormat = Literal["json", "console"]
 type Output = Literal["text", "json"]
+
+
+@Parameter(name="*")
+@dataclass(frozen=True)
+class ModelOptions:
+    provider: Provider | None = None
+    """Model provider."""
+
+    model: str | None = None
+    """Model name, e.g. claude-opus-5-5 or an OpenRouter model id."""
+
+    effort: Effort | None = None
+    """Reasoning effort."""
+
+    max_cost: float | None = None
+    """Spending cap in US dollars; the run wraps up once model calls reach it."""
+
+
+@Parameter(name="*")
+@dataclass(frozen=True)
+class ConfigOptions:
+    flag: Annotated[list[str], Parameter(negative=())] = field(default_factory=list)
+    """Feature flag as key=value, e.g. nudge.time=true. Repeatable."""
+
+    setting: Annotated[list[str], Parameter(name="--set", negative=())] = field(
+        default_factory=list
+    )
+    """Any setting as key=value, e.g. model.effort=low or sandbox.gpus=[0]; JSON values parse."""
+
+
+@Parameter(name="*")
+@dataclass(frozen=True)
+class PrintOptions:
+    prompt: Annotated[str | None, Parameter(name=["--print", "-p"])] = None
+    """Run this one request to the end without the terminal UI, then print the answer."""
+
+    output: Output = "text"
+    """With --print: the final answer as text, or every event as a JSON line."""
+
+    yes: bool = False
+    """With --print: allow calls the permission rules would ask about, instead of denying."""
+
+
+@Parameter(name="*")
+@dataclass(frozen=True)
+class SessionChoice:
+    latest: Annotated[bool, Parameter(name=["--continue", "-c"], negative=())] = False
+    """Continue this project's most recent session."""
+
+    resume: str | None = None
+    """Continue the session whose id starts with this."""
+
+    def paths(self, sessions: ProjectSessions) -> RunPaths | None:
+        if self.resume:
+            return sessions.find(self.resume)
+
+        return sessions.latest() if self.latest else None
 
 
 class JunoCli:
@@ -62,14 +120,10 @@ class JunoCli:
         *,
         runs: Path = Path("runs"),
         name: str | None = None,
-        provider: Provider | None = None,
-        model: str | None = None,
-        effort: Effort | None = None,
         budget: str | None = None,
-        max_cost: float | None = None,
         sandbox: SandboxKind | None = None,
-        flag: list[str] | None = None,
-        setting: Annotated[list[str] | None, Parameter(name="--set", negative=())] = None,
+        llm: ModelOptions = ModelOptions(),
+        options: ConfigOptions = ConfigOptions(),
         log_format: LogFormat = "json",
     ) -> int:
         """Start a run on the task folder TASK.
@@ -82,39 +136,16 @@ class JunoCli:
             Folder where run folders are created.
         name
             Run folder name; defaults to the task id and the start time.
-        provider
-            Model provider.
-        model
-            Model name, e.g. claude-opus-5-5 or an OpenRouter model id.
-        effort
-            Reasoning effort.
         budget
             Time budget such as 30m, 6h or 1h30m.
-        max_cost
-            Spending cap in US dollars. The run wraps up and submits its best validated result
-            once model calls reach it; the last call can go slightly over.
         sandbox
             Where commands run.
-        flag
-            Feature flag as key=value, e.g. nudge.time=true. Repeatable.
-        setting
-            Any setting as key=value, e.g. model.effort=low or sandbox.gpus=[0]. Values are
-            read as JSON when they parse, otherwise as text. Repeatable.
         log_format
             Log line format on stderr.
         """
 
         self.configure_logging(log_format)
-        config = self.config(
-            provider,
-            model,
-            effort,
-            budget,
-            sandbox,
-            flag or [],
-            max_cost=max_cost,
-            settings=setting or [],
-        )
+        config = self.config(llm, options, budget=budget, sandbox=sandbox)
         loaded = TaskFolder.load(task)
         paths = RunPaths(root=runs / (name or f"{loaded.id}-{time.strftime('%Y%m%d-%H%M%S')}"))
         TaskFolder.save(loaded, paths)
@@ -166,93 +197,55 @@ class JunoCli:
     async def chat(
         self,
         *,
-        prompt: Annotated[str | None, Parameter(name=["--print", "-p"])] = None,
-        output: Output = "text",
-        yes: bool = False,
-        resume_latest: Annotated[bool, Parameter(name=["--continue", "-c"], negative=())] = False,
-        resume: str | None = None,
+        printing: PrintOptions = PrintOptions(),
+        earlier: SessionChoice = SessionChoice(),
         project: Path = Path(),
         mode: Mode | None = None,
-        provider: Provider | None = None,
-        model: str | None = None,
-        effort: Effort | None = None,
-        max_cost: float | None = None,
         sandbox: SandboxKind = "local",
-        flag: list[str] | None = None,
-        setting: Annotated[list[str] | None, Parameter(name="--set", negative=())] = None,
+        llm: ModelOptions = ModelOptions(),
+        options: ConfigOptions = ConfigOptions(),
     ) -> int:
         """Work on the project in the current folder as a coding agent.
 
         Parameters
         ----------
-        prompt
-            Run this one request to the end without the terminal UI, then print the answer.
-        output
-            With --print: the final answer as text, or every event as a JSON line.
-        yes
-            With --print: allow calls the permission rules would ask about, instead of denying.
-        resume_latest
-            Continue this project's most recent session.
-        resume
-            Continue the session whose id starts with this.
         project
             Project folder; defaults to the current one.
         mode
             Permission mode: ask, accept-edits, plan (read-only) or yolo.
-        provider
-            Model provider.
-        model
-            Model name.
-        effort
-            Reasoning effort.
-        max_cost
-            Spending cap in US dollars for the session.
         sandbox
             Run commands directly in the project, or in a Podman container that mounts it.
-        flag
-            Feature flag as key=value. Repeatable.
-        setting
-            Any setting as key=value. Repeatable.
         """
 
-        if prompt is None:
-            print(
-                "juno chat opens the terminal UI, which is not built yet; use -p", file=sys.stderr
-            )
-            return 2
-
-        config = self.config(
-            provider,
-            model,
-            effort,
-            None,
-            sandbox,
-            flag or [],
-            max_cost=max_cost,
-            settings=setting or [],
-        )
+        config = self.config(llm, options, sandbox=sandbox)
         sessions = ProjectSessions(project)
         permissions = Permissions.load(sessions.project, self.user_config_dir())
 
         if mode is not None:
             permissions.mode = mode
 
+        previous = earlier.paths(sessions)
+
+        if printing.prompt is None:
+            from juno.entrypoints.tui import ChatLauncher, JunoApp
+
+            launcher = ChatLauncher(config=config, sessions=sessions, permissions=permissions)
+            await JunoApp(launcher, resume=previous).run_async()
+            return 0
+
         setup = ChatSetup(
-            driver=ScriptDriver([prompt]),
-            approver=RulesOnly(yes=yes),
+            driver=ScriptDriver([printing.prompt]),
+            approver=RulesOnly(yes=printing.yes),
             permissions=permissions,
             instructions=sessions.instructions(),
         )
-        earlier = (
-            sessions.find(resume) if resume else (sessions.latest() if resume_latest else None)
-        )
-        opener = Harness.resume_chat if earlier is not None else Harness.start_chat
-        paths = earlier or sessions.new()
+        opener = Harness.resume_chat if previous is not None else Harness.start_chat
+        paths = previous or sessions.new()
 
         async with await opener(
             config=config, chat=setup, paths=paths, adapters=Adapters()
         ) as harness:
-            if output == "json":
+            if printing.output == "json":
                 harness.bus.subscribe(Event, self.print_event)
 
             await self.drive(harness, f"juno chat --resume {paths.root.name} continues it")
@@ -260,7 +253,7 @@ class JunoCli:
 
         answer = self.final_text(session)
 
-        if output == "json":
+        if printing.output == "json":
             result = {
                 "type": "Result",
                 "session_id": session.id,
@@ -454,20 +447,16 @@ class JunoCli:
 
     @staticmethod
     def config(
-        provider: Provider | None,
-        model: str | None,
-        effort: Effort | None,
-        budget: str | None,
-        sandbox: SandboxKind | None,
-        flags: list[str],
+        llm: ModelOptions,
+        options: ConfigOptions,
         *,
-        max_cost: float | None = None,
-        settings: Sequence[str] = (),
+        budget: str | None = None,
+        sandbox: SandboxKind | None = None,
     ) -> HarnessConfig:
         overrides: dict[str, Any] = {}
         sections: dict[str, dict[str, Any]] = {
-            "model": {"provider": provider, "name": model, "effort": effort},
-            "budget": {"total": budget, "max_cost": max_cost},
+            "model": {"provider": llm.provider, "name": llm.model, "effort": llm.effort},
+            "budget": {"total": budget, "max_cost": llm.max_cost},
             "sandbox": {"kind": sandbox},
         }
 
@@ -475,11 +464,12 @@ class JunoCli:
             if chosen := {key: value for key, value in values.items() if value is not None}:
                 overrides[section] = chosen
 
-        if flags:
-            base = HarnessConfig().flags
-            overrides["flags"] = base.with_overrides(JunoCli.parse_flags(flags)).model_dump()
+        if options.flag:
+            parsed = JunoCli.parse_flags(options.flag)
+            overrides["flags"] = HarnessConfig().flags.with_overrides(parsed).model_dump()
 
-        return HarnessConfig(**DottedKeys.merge(overrides, JunoCli.parse_settings(settings)))
+        settings = JunoCli.parse_settings(options.setting)
+        return HarnessConfig(**DottedKeys.merge(overrides, settings))
 
     @staticmethod
     def parse_flags(flags: list[str]) -> dict[str, bool]:

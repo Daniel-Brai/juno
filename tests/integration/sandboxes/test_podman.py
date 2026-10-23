@@ -41,8 +41,7 @@ async def sandbox(paths: RunPaths) -> AsyncIterator[PodmanSandbox]:
     box = PodmanSandbox(
         SandboxSettings(image=IMAGE, memory="512m"),
         name=f"juno-test-{uuid7().hex[-12:]}",
-        workspace=paths.workspace,
-        logs=paths.logs,
+        paths=paths,
         data=data,
     )
     await box.start()

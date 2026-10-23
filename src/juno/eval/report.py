@@ -2,6 +2,7 @@ import csv
 import io
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
@@ -37,6 +38,52 @@ class RunScore(BaseModel):
     cost_usd: float
 
 
+@dataclass(frozen=True, slots=True)
+class GradedRun:
+    arm: str
+    seed: int
+    state: str
+    grade: RunGrade
+    usage: Usage
+
+    def score(self, reference: Leaderboard | None) -> RunScore:
+        grade, usage = self.grade, self.usage
+        return RunScore(
+            arm=self.arm,
+            task_id=grade.task_id,
+            seed=self.seed,
+            state=self.state,
+            metric=grade.metric,
+            leaderboard=grade.leaderboard,
+            selected_score=grade.selected.test_score if grade.selected else None,
+            oracle_score=grade.oracle.test_score if grade.oracle else None,
+            selected_percentile=self._percentile(grade.selected, reference),
+            oracle_percentile=self._percentile(grade.oracle, reference),
+            selected_medal=self._medal(grade.selected),
+            oracle_medal=self._medal(grade.oracle),
+            submissions=len(grade.submissions),
+            input_tokens=usage.input_tokens + usage.cache_creation_input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_tokens=usage.cache_read_input_tokens,
+            cost_usd=usage.cost_usd,
+        )
+
+    def _percentile(self, item: SubmissionGrade | None, reference: Leaderboard | None) -> float:
+        if item is None or item.test_score is None:
+            return 0.0
+
+        if self.grade.leaderboard:
+            return item.percentile or 0.0
+
+        return reference.percentile(item.test_score) if reference else 0.0
+
+    def _medal(self, item: SubmissionGrade | None) -> bool | None:
+        if not self.grade.leaderboard:
+            return None
+
+        return item is not None and item.medal is not None
+
+
 class Scorecard:
     def __init__(self, experiment: Experiment, grader: Grader | None = None) -> None:
         self._experiment = experiment
@@ -44,7 +91,7 @@ class Scorecard:
         self.skipped: list[str] = []
 
     def collect(self) -> list[RunScore]:
-        graded: list[tuple[str, int, str, RunGrade, Usage]] = []
+        graded: list[GradedRun] = []
 
         for plan in self._experiment.plans():
             folder = RunFolder(plan.folder)
@@ -62,13 +109,11 @@ class Scorecard:
                 continue
 
             self._grader.save(folder, grade)
-            graded.append((plan.arm, plan.seed, session.state, grade, folder.usage(session.id)))
+            usage = folder.usage(session.id)
+            graded.append(GradedRun(plan.arm, plan.seed, session.state, grade, usage))
 
-        references = self._references([grade for *_, grade, _ in graded])
-        return [
-            self._score(arm, seed, state, grade, usage, references.get(grade.task_id))
-            for arm, seed, state, grade, usage in graded
-        ]
+        references = self._references([run.grade for run in graded])
+        return [run.score(references.get(run.grade.task_id)) for run in graded]
 
     @staticmethod
     def _references(grades: Sequence[RunGrade]) -> dict[str, Leaderboard]:
@@ -82,48 +127,6 @@ class Scorecard:
                 pools[grade.task_id].append(grade.selected.test_score)
 
         return {task: Leaderboard(pool, directions[task]) for task, pool in pools.items()}
-
-    @staticmethod
-    def _score(
-        arm: str,
-        seed: int,
-        state: str,
-        grade: RunGrade,
-        usage: Usage,
-        reference: Leaderboard | None,
-    ) -> RunScore:
-
-        def percentile(item: SubmissionGrade | None) -> float:
-            if item is None or item.test_score is None:
-                return 0.0
-
-            if grade.leaderboard:
-                return item.percentile or 0.0
-
-            return reference.percentile(item.test_score) if reference else 0.0
-
-        def medal(item: SubmissionGrade | None) -> bool | None:
-            return (item is not None and item.medal is not None) if grade.leaderboard else None
-
-        return RunScore(
-            arm=arm,
-            task_id=grade.task_id,
-            seed=seed,
-            state=state,
-            metric=grade.metric,
-            leaderboard=grade.leaderboard,
-            selected_score=grade.selected.test_score if grade.selected else None,
-            oracle_score=grade.oracle.test_score if grade.oracle else None,
-            selected_percentile=percentile(grade.selected),
-            oracle_percentile=percentile(grade.oracle),
-            selected_medal=medal(grade.selected),
-            oracle_medal=medal(grade.oracle),
-            submissions=len(grade.submissions),
-            input_tokens=usage.input_tokens + usage.cache_creation_input_tokens,
-            output_tokens=usage.output_tokens,
-            cached_tokens=usage.cache_read_input_tokens,
-            cost_usd=usage.cost_usd,
-        )
 
 
 class Markdown:

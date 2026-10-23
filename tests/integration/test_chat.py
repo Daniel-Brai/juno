@@ -13,7 +13,7 @@ from juno.config import HarnessConfig, SandboxSettings
 from juno.domain.events import ApprovalDecided, Event
 from juno.domain.session import Session, State
 from juno.domain.values import Role, RunPaths
-from juno.entrypoints.cli import JunoCli
+from juno.entrypoints.cli import JunoCli, PrintOptions, SessionChoice
 from juno.ports import LlmClient
 from juno.projects import ProjectSessions
 from juno.service.drivers import ScriptDriver
@@ -249,7 +249,9 @@ class TestChatCli:
     ) -> None:
         scripted.append([Reply.tools(("editor", FIX)), Reply.text("Fixed it.")])
 
-        code = await JunoCli().chat(prompt="fix add", project=project, yes=True)
+        code = await JunoCli().chat(
+            printing=PrintOptions(prompt="fix add", yes=True), project=project
+        )
 
         out = capsys.readouterr()
         assert (code, out.out) == (0, "Fixed it.\n")
@@ -261,7 +263,9 @@ class TestChatCli:
     ) -> None:
         scripted.append([Reply.tools(("editor", FIX)), Reply.text("Could not.")])
 
-        code = await JunoCli().chat(prompt="fix add", project=project, output="json")
+        code = await JunoCli().chat(
+            printing=PrintOptions(prompt="fix add", output="json"), project=project
+        )
 
         lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
         kinds = [line["type"] for line in lines]
@@ -278,15 +282,11 @@ class TestChatCli:
         scripted += [one, two]
         cli = JunoCli()
 
-        await cli.chat(prompt="one", project=project)
+        await cli.chat(printing=PrintOptions(prompt="one"), project=project)
         first = capsys.readouterr().err
-        await cli.chat(prompt="two", project=project, resume_latest=True)
+        await cli.chat(
+            printing=PrintOptions(prompt="two"), earlier=SessionChoice(latest=True), project=project
+        )
         second = capsys.readouterr()
 
         assert second.out == "Second.\n" and first == second.err
-
-    async def test_without_print_mode_it_points_to_print_mode(
-        self, project: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        assert await JunoCli().chat(project=project) == 2
-        assert "use -p" in capsys.readouterr().err

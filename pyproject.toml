@@ -40,6 +40,11 @@ dependencies = [
 [project.scripts]
 juno = "juno.entrypoints.cli:app"
 
+[project.optional-dependencies]
+tui = [
+    "textual>=8.2.8",
+]
+
 
 [dependency-groups]
 test = [
@@ -50,6 +55,7 @@ test = [
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
     "respx>=0.23.1",
+    "textual>=8.2.8",
 ]
 lint = [
     "git-changelog>=2.10.0",
@@ -85,6 +91,14 @@ ignore = ["E501"]
 "src/juno/adapters/git.py" = ["S603", "S607"]
 "src/juno/config.py" = ["ARG003"]
 "src/juno/eval/stats.py" = ["S311"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "juno.entrypoints.cli.ModelOptions",
+    "juno.entrypoints.cli.ConfigOptions",
+    "juno.entrypoints.cli.PrintOptions",
+    "juno.entrypoints.cli.SessionChoice",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["juno", "fakes"]

@@ -20,7 +20,7 @@ help:
 > @printf "  make release VERSION=<v> PUSH=<true|false>\tChangelog, release commit and tag\n"
 
 setup:
-> $(UV) sync --all-groups
+> $(UV) sync --all-groups --all-extras
 > $(UV) run prek install
 
 fmt:

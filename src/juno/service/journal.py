@@ -16,7 +16,7 @@ from juno.domain.values import (
     ToolResult,
     Usage,
 )
-from juno.ports import Clock, UnitOfWorkFactory
+from juno.ports import Clock, TransactionFactory
 from juno.service.prompts import Prompts
 from juno.tools.registry import ToolRegistry
 
@@ -65,11 +65,17 @@ class Journal:
         "interrupted by a harness restart before this call finished; "
         "check the workspace before retrying it"
     )
+    STOPPED: ClassVar[str] = "stopped by the user before it finished"
 
     def __init__(
-        self, units: UnitOfWorkFactory, *, registry: ToolRegistry, prompts: Prompts, clock: Clock
+        self,
+        transactions: TransactionFactory,
+        *,
+        registry: ToolRegistry,
+        prompts: Prompts,
+        clock: Clock,
     ) -> None:
-        self._units = units
+        self._transactions = transactions
         self._clock = clock
         self._registry = registry
         self._prompts = prompts
@@ -93,14 +99,14 @@ class Journal:
         session.touch(self._clock.now())
         history = self._history.copy()
 
-        async with self._units() as uow:
-            await uow.sessions.save(session)
+        async with self._transactions() as tx:
+            await tx.sessions.save(session)
 
             for index in range(self._persisted, len(session.messages)):
                 message = session.messages[index]
                 history.add(message)
                 is_reply = message.role is Role.ASSISTANT
-                await uow.messages.append(
+                await tx.messages.append(
                     session.id,
                     MessageRecord(
                         index=index,
@@ -110,14 +116,14 @@ class Journal:
                     ),
                 )
 
-            await uow.commit()
+            await tx.commit()
 
         self._persisted = len(session.messages)
         self._history = history
 
     async def restore(self, session: Session) -> Session:
-        async with self._units() as uow:
-            records = await uow.messages.all(session.id)
+        async with self._transactions() as tx:
+            records = await tx.messages.all(session.id)
 
         history = self._empty_history()
 
@@ -141,13 +147,36 @@ class Journal:
 
         return [task.result() for task in tasks]
 
+    async def stop_tools(self, session_id: str, calls: Sequence[ToolCall]) -> list[ToolResult]:
+        results: list[ToolResult] = []
+
+        for call in calls:
+            async with self._transactions() as tx:
+                record = await tx.tool_calls.find(session_id, call.id)
+
+                if record is not None and record.result is not None:
+                    results.append(record.result)
+                    continue
+
+                stopped = ToolResult(call_id=call.id, content=self.STOPPED, is_error=True)
+
+                if record is None:
+                    await tx.tool_calls.record_intent(session_id, call)
+
+                await tx.tool_calls.record_result(session_id, stopped, ToolCallStatus.INTERRUPTED)
+                await tx.commit()
+
+            results.append(stopped)
+
+        return results
+
     async def best(self, session_id: str) -> Submission | None:
-        async with self._units() as uow:
-            return await uow.submissions.best(session_id)
+        async with self._transactions() as tx:
+            return await tx.submissions.best(session_id)
 
     async def _run_tool(self, session_id: str, call: ToolCall) -> ToolResult:
-        async with self._units() as uow:
-            record = await uow.tool_calls.find(session_id, call.id)
+        async with self._transactions() as tx:
+            record = await tx.tool_calls.find(session_id, call.id)
 
         if record is not None and record.result is not None:
             return record.result
@@ -157,9 +186,9 @@ class Journal:
             await self._finish(session_id, interrupted, ToolCallStatus.INTERRUPTED)
             return interrupted
 
-        async with self._units() as uow:
-            await uow.tool_calls.record_intent(session_id, call)
-            await uow.commit()
+        async with self._transactions() as tx:
+            await tx.tool_calls.record_intent(session_id, call)
+            await tx.commit()
 
         result = await self._registry.dispatch(call)
         await self._finish(session_id, result, ToolCallStatus.DONE)
@@ -169,6 +198,6 @@ class Journal:
         return HistoryHash(self.request([]).model_dump_json(exclude={"messages"}))
 
     async def _finish(self, session_id: str, result: ToolResult, status: ToolCallStatus) -> None:
-        async with self._units() as uow:
-            await uow.tool_calls.record_result(session_id, result, status)
-            await uow.commit()
+        async with self._transactions() as tx:
+            await tx.tool_calls.record_result(session_id, result, status)
+            await tx.commit()

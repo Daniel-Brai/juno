@@ -32,6 +32,12 @@ class ScriptDriver:
 class HumanDriver:
     def __init__(self) -> None:
         self.inbox: asyncio.Queue[str | None] = asyncio.Queue()
+        self.waiting = False
 
     async def next_message(self, _session: Session, /) -> str | None:
-        return await self.inbox.get()
+        self.waiting = True
+
+        try:
+            return await self.inbox.get()
+        finally:
+            self.waiting = False

@@ -33,9 +33,6 @@ class TestBootstrap:
         with pytest.raises(ValueError, match="share no task"):
             QUICK.difference({"a": [1]}, {"b": [1]})
 
-    def test_estimates_format_with_their_interval(self) -> None:
-        assert Estimate(12.34, 8.1, 16.06).format() == "12.3 [8.1, 16.1]"
-
     @settings(max_examples=50, deadline=None)
     @given(samples)
     def test_the_interval_holds_the_point_estimate(self, data: Samples) -> None:

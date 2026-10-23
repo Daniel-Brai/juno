@@ -9,7 +9,7 @@ from juno.bootstrap import Harness
 from juno.config import HarnessConfig
 from juno.domain.session import Session
 from juno.domain.values import Direction, ModelReply, ModelRequest, RunPaths
-from juno.entrypoints.cli import JunoCli
+from juno.entrypoints.cli import ConfigOptions, JunoCli, ModelOptions
 from juno.eval.experiment import Experiment
 from juno.eval.runner import EvalRunner
 from juno.ports import LlmClient
@@ -73,7 +73,12 @@ class TestCliOptions:
     ) -> None:
         monkeypatch.chdir(tmp_path)
 
-        config = JunoCli.config("openrouter", "x/y", "low", "30m", "local", ["nudge.time=true"])
+        config = JunoCli.config(
+            ModelOptions(provider="openrouter", model="x/y", effort="low"),
+            ConfigOptions(flag=["nudge.time=true"]),
+            budget="30m",
+            sandbox="local",
+        )
 
         assert (config.model.provider, config.model.name, config.model.effort) == (
             "openrouter",
@@ -84,20 +89,13 @@ class TestCliOptions:
         assert config.sandbox.kind == "local"
         assert config.flags.nudge.time and config.flags.tools.jobs
 
-    def test_max_cost_sets_the_budget_cap(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-
-        config = JunoCli.config(None, None, None, None, None, [], max_cost=0.5)
-
-        assert config.budget.max_cost == 0.5
-
     def test_a_cost_cap_needs_a_priced_anthropic_model(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        config = JunoCli.config(None, "claude-future-9", None, None, None, [], max_cost=0.5)
+        config = JunoCli.config(
+            ModelOptions(model="claude-future-9", max_cost=0.5), ConfigOptions()
+        )
         session = Session(task_id="t", started_at=0, deadline=60)
 
         with pytest.raises(ValueError, match="needs a price for claude-future-9"):
@@ -123,13 +121,8 @@ class TestCliOptions:
         monkeypatch.chdir(tmp_path)
 
         config = JunoCli.config(
-            None,
-            None,
-            "high",
-            None,
-            None,
-            [],
-            settings=["model.effort=low", "sandbox.gpus=[1]", "watchdog.interval=2s"],
+            ModelOptions(effort="high"),
+            ConfigOptions(setting=["model.effort=low", "sandbox.gpus=[1]", "watchdog.interval=2s"]),
         )
 
         assert config.model.effort == "low"

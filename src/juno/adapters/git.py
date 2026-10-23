@@ -36,6 +36,22 @@ class GitCheckpointer:
         await self._git("commit", "-q", "--no-verify", "-m", message)
         return (await self._git("rev-parse", "HEAD")).strip()
 
+    async def restore(self, commit: str) -> list[str]:
+        current = await self.checkpoint(f"before restoring {commit[:12]}") or commit
+        output = await self._git("diff", "--name-status", "--no-renames", "-z", commit, current)
+        fields = [field for field in output.split("\0") if field]
+        changed: list[str] = []
+
+        for status, path in zip(fields[::2], fields[1::2], strict=True):
+            if status == "A":
+                (self._workspace / path).unlink(missing_ok=True)
+            else:
+                await self._git("checkout", commit, "--", path)
+
+            changed.append(path)
+
+        return changed
+
     async def _changed_paths(self) -> list[str]:
         output = await self._git("status", "--porcelain=v1", "-z", "--untracked-files=all")
         entries = iter(output.split("\0"))

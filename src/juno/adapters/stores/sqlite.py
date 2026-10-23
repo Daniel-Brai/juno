@@ -188,7 +188,7 @@ class SqliteEventRepo(SqliteRepo):
         return [str(row[0]) for row in rows]
 
 
-class SqliteUnitOfWork:
+class SqliteTransaction:
     def __init__(self, store: SqliteStore) -> None:
         connection = store.connection
         self.sessions = SqliteSessionRepo(connection)
@@ -322,12 +322,12 @@ class SqliteStore:
     async def close(self) -> None:
         await self.connection.close()
 
-    def unit_of_work(self) -> SqliteUnitOfWork:
-        return SqliteUnitOfWork(self)
+    def transaction(self) -> SqliteTransaction:
+        return SqliteTransaction(self)
 
     async def claim(self) -> Token[bool]:
         if self._holding.get():
-            raise RuntimeError("units of work cannot nest; finish the open one first")
+            raise RuntimeError("transactions cannot nest; finish the open one first")
 
         await self._lock.acquire()
         return self._holding.set(True)

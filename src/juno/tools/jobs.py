@@ -25,7 +25,7 @@ class JobTools:
         jobs: Sequence[Job] = (),
     ) -> None:
         self._sandbox = sandbox
-        self._units = context.units
+        self._transactions = context.transactions
         self._session = context.session
         self._clock = context.clock
         self._logs_dir = logs_dir
@@ -187,9 +187,9 @@ class JobTools:
         return await self._save(job.model_copy(update={"state": state, "exit_code": code}))
 
     async def _save(self, job: Job) -> Job:
-        async with self._units() as uow:
-            await uow.jobs.save(self._session.id, job)
-            await uow.commit()
+        async with self._transactions() as tx:
+            await tx.jobs.save(self._session.id, job)
+            await tx.commit()
 
         self._jobs[job.id] = job
         return job

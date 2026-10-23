@@ -67,6 +67,8 @@ class Sandbox(Protocol):
 class Checkpointer(Protocol):
     async def checkpoint(self, message: str) -> str | None: ...
 
+    async def restore(self, commit: str) -> list[str]: ...
+
 
 class SessionRepo(Protocol):
     async def save(self, session: Session) -> None: ...
@@ -118,7 +120,7 @@ class EventRepo(Protocol):
     async def count(self, session_id: str) -> int: ...
 
 
-class UnitOfWork(Protocol):
+class Transaction(Protocol):
     @property
     def sessions(self) -> SessionRepo: ...
 
@@ -154,4 +156,4 @@ class UnitOfWork(Protocol):
     async def rollback(self) -> None: ...
 
 
-type UnitOfWorkFactory = Callable[[], UnitOfWork]
+type TransactionFactory = Callable[[], Transaction]

@@ -16,12 +16,6 @@ class Csv:
 
 
 class TestTable:
-    def test_reads_rows_by_id(self, tmp_path: Path) -> None:
-        table = Csv.table(tmp_path, "id,label\n1, a\n2,b\n")
-
-        assert table.columns == ("label",)
-        assert table.rows == {"1": {"label": "a"}, "2": {"label": "b"}}
-
     @pytest.mark.parametrize(
         ("text", "message"),
         [

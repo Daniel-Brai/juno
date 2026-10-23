@@ -13,22 +13,22 @@ from juno.domain.events import (
     TurnContinued,
 )
 from juno.domain.values import Checkpoint
-from juno.ports import Checkpointer, Clock, UnitOfWorkFactory
+from juno.ports import Checkpointer, Clock, TransactionFactory
 from juno.service.bus import MessageBus
 from juno.service.context import RunContext
 
 
 class EventRecorder:
-    def __init__(self, units: UnitOfWorkFactory) -> None:
-        self._units = units
+    def __init__(self, transactions: TransactionFactory) -> None:
+        self._transactions = transactions
 
     def attach(self, bus: MessageBus) -> None:
         bus.subscribe(Event, self.record)
 
     async def record(self, event: Event) -> None:
-        async with self._units() as uow:
-            await uow.events.add(event)
-            await uow.commit()
+        async with self._transactions() as tx:
+            await tx.events.add(event)
+            await tx.commit()
 
 
 class CheckpointRecorder:
@@ -43,7 +43,7 @@ class CheckpointRecorder:
     ) -> None:
         self._checkpointer = checkpointer
         self._triggers = triggers
-        self._units = context.units
+        self._transactions = context.transactions
         self._bus = context.bus
         self._clock = context.clock
         self._session = context.session
@@ -61,9 +61,9 @@ class CheckpointRecorder:
 
         checkpoint = Checkpoint(commit=commit, message_index=index)
 
-        async with self._units() as uow:
-            await uow.checkpoints.add(self._session.id, checkpoint)
-            await uow.commit()
+        async with self._transactions() as tx:
+            await tx.checkpoints.add(self._session.id, checkpoint)
+            await tx.commit()
 
         await self._bus.publish(
             CheckpointTaken(

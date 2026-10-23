@@ -110,12 +110,12 @@ class TestScriptedSession:
 
         await run.harness.run()
 
-        async with run.harness.store.unit_of_work() as uow:
+        async with run.harness.store.transaction() as tx:
             session_id = run.harness.session.id
-            records = await uow.messages.all(session_id)
-            checkpoints = await uow.checkpoints.all(session_id)
-            event_types = await uow.events.types(session_id)
-            stored = await uow.sessions.get(session_id)
+            records = await tx.messages.all(session_id)
+            checkpoints = await tx.checkpoints.all(session_id)
+            event_types = await tx.events.types(session_id)
+            stored = await tx.sessions.get(session_id)
 
         assert [record.message for record in records] == run.harness.session.messages
         assert all(r.request_hash for r in records if r.message.role == "assistant")

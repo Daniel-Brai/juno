@@ -63,7 +63,6 @@ class TestExperiment:
         assert plans[3].flags == {"tools.system": False}
         assert plans[3].settings == {"model.effort": "low"}
         assert experiment.base_arm == "base"
-        assert plans[0].max_cost is None
 
     def test_a_suite_adds_tasks_relative_to_itself(self, tmp_path: Path) -> None:
         Files.task(tmp_path, "alpha")

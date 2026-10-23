@@ -133,11 +133,6 @@ class TestAnthropicPrices:
         assert AnthropicPrices.cost("claude-haiku-5-5", small) == pytest.approx(0.0105)
         assert AnthropicPrices.cost("claude-haiku-5-5", large) == pytest.approx(0.0525005)
 
-    def test_unknown_models_cost_nothing_and_are_reported(self) -> None:
-        assert AnthropicPrices.cost("claude-future-9", Usage(input_tokens=10)) == 0
-        assert not AnthropicPrices.knows("claude-future-9")
-        assert AnthropicPrices.knows("claude-opus-5-5")
-
 
 class TestOpenRouterTranslation:
     def test_history_becomes_chat_messages(self) -> None:

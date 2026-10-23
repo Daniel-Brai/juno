@@ -22,7 +22,7 @@ class SubmissionTools:
         direction: Direction,
     ) -> None:
         self._workspace = workspace
-        self._units = context.units
+        self._transactions = context.transactions
         self._session_id = context.session.id
         self._clock = context.clock
         self._bus = context.bus
@@ -70,17 +70,17 @@ class SubmissionTools:
             created_at=self._clock.now(),
         )
 
-        async with self._units() as uow:
-            submissions = await uow.submissions.all(self._session_id)
+        async with self._transactions() as tx:
+            submissions = await tx.submissions.all(self._session_id)
             existing = [item for item in submissions if item.sha256 == digest]
 
             if existing:
                 return f"{args.path} is already registered with validation score {existing[0].val_score}"
 
             await asyncio.to_thread(shutil.copy2, source, target)
-            await uow.submissions.add(self._session_id, submission)
-            best = await uow.submissions.best(self._session_id)
-            await uow.commit()
+            await tx.submissions.add(self._session_id, submission)
+            best = await tx.submissions.best(self._session_id)
+            await tx.commit()
 
         await self._bus.publish(
             SubmissionRegistered(
@@ -94,9 +94,9 @@ class SubmissionTools:
         )
 
     async def list(self, _: ListSubmissions) -> str:
-        async with self._units() as uow:
-            submissions = await uow.submissions.all(self._session_id)
-            best = await uow.submissions.best(self._session_id)
+        async with self._transactions() as tx:
+            submissions = await tx.submissions.all(self._session_id)
+            best = await tx.submissions.best(self._session_id)
 
         if not submissions:
             return "no submissions yet"
