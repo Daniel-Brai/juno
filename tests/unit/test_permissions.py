@@ -72,6 +72,14 @@ class TestPermissions:
         assert permissions.decide(Calls.edit("./src/c.py"), read_only=False)[0] is Action.ALLOW
         assert permissions.decide(Calls.edit("tests/c.py"), read_only=False)[0] is Action.ASK
 
+    def test_rules_can_match_tool_names_by_pattern(self) -> None:
+        permissions = Permissions(rules=[Rule(tool="mcp__demo__*", action=Action.ALLOW)])
+        call = ToolCall(id="1", name="mcp__demo__add", args={})
+        other = ToolCall(id="2", name="mcp__github__push", args={})
+
+        assert permissions.decide(call, read_only=False)[0] is Action.ALLOW
+        assert permissions.decide(other, read_only=False)[0] is Action.ASK
+
     def test_project_rules_and_mode_come_before_user_ones(self, tmp_path: Path) -> None:
         project, user = tmp_path / "project", tmp_path / "user"
         (project / ".juno").mkdir(parents=True)

@@ -4,7 +4,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from textual.pilot import Pilot
+from textual.widgets import Static
 
 from fakes.clock import FakeClock
 from fakes.llm import Reply, ScriptedLlm, Turn
@@ -13,7 +15,16 @@ from juno.bootstrap import Adapters
 from juno.config import HarnessConfig, SandboxSettings
 from juno.domain.session import State
 from juno.domain.values import ModelReply, ModelRequest, Role
-from juno.entrypoints.tui import ApprovalPrompt, ChatLauncher, Composer, JunoApp
+from juno.entrypoints.tui import (
+    ActivityLine,
+    ApprovalPrompt,
+    ChatLauncher,
+    CommandMenu,
+    Composer,
+    Glyphs,
+    JunoApp,
+    SessionPicker,
+)
 from juno.projects import ProjectSessions
 from juno.service.loop import AgentLoop
 from juno.tools.permissions import Permissions
@@ -94,7 +105,13 @@ class Chat:
 
     @staticmethod
     def shown(app: JunoApp) -> str:
-        return "\n".join(str(widget.render()) for widget in app.query("#transcript > *"))
+        console = Console(width=120, color_system=None, highlight=False)
+
+        with console.capture() as captured:
+            for widget in app.query("#transcript > *"):
+                console.print(widget.content if isinstance(widget, Static) else widget.render())
+
+        return captured.get()
 
 
 @pytest.fixture
@@ -113,7 +130,7 @@ class TestTui:
             await chat.until(pilot, lambda: chat.idle(app))
 
             assert "hi" in chat.shown(app)
-            assert str(app.query_one("#status").render()).endswith("ready")
+            assert not app.query(ActivityLine)
             assert app.harness is not None
             assert app.harness.session.state is State.AWAITING_CONTINUE
 
@@ -237,3 +254,133 @@ class TestTui:
             assert app.harness is not None
             sent = app.harness.session.messages[4]
             assert sent.role is Role.USER and "I undid the changes" in str(sent.content)
+
+
+class TestCommandMenu:
+    async def test_typing_a_slash_offers_matching_commands(self, chat: Chat) -> None:
+        app = chat.app(ScriptedLlm([]))
+
+        async with app.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(app))
+            await pilot.press("slash", "m", "o")
+            menu = app.query_one(CommandMenu)
+
+            assert [match.text for match in menu.matches] == ["/model ", "/mode "]
+
+            await pilot.press("down", "tab")
+
+            assert app.query_one(Composer).text == "/mode "
+            assert next(match.text for match in menu.matches) == "/mode ask"
+
+    async def test_enter_runs_a_command_without_arguments(self, chat: Chat) -> None:
+        app = chat.app(ScriptedLlm([]))
+
+        async with app.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(app))
+            await pilot.press("slash", "h", "e", "enter")
+            await chat.until(pilot, lambda: "Commands" in chat.shown(app))
+
+            assert app.query_one(Composer).text == ""
+
+
+class TestArgumentCompletion:
+    async def test_arguments_complete_from_their_choices(self, chat: Chat) -> None:
+        app = chat.app(ScriptedLlm([]))
+
+        async with app.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(app) and bool(app._models))
+            menu = app.query_one(CommandMenu)
+
+            app.query_one(Composer).insert("/effort ")
+            await pilot.pause()
+            efforts = [match.label.plain for match in menu.matches]
+
+            app.query_one(Composer).clear()
+            app.query_one(Composer).insert("/model TWO")
+            await pilot.pause()
+            models = [match.text for match in menu.matches]
+
+        assert efforts == ["low", "medium", "high  current", "xhigh", "max"]
+        assert models == ["/model scripted/two"]
+
+
+class TestCompact:
+    async def test_compact_continues_in_a_new_session_with_the_summary(
+        self, chat: Chat, sessions: ProjectSessions
+    ) -> None:
+        turns: list[Turn] = [
+            Reply.text("Sure."),
+            Reply.text("Goal: fix add in calc.py."),
+            Reply.text("On it."),
+        ]
+        app = chat.app(ScriptedLlm(turns))
+
+        async with app.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(app))
+            await chat.send(pilot, "fix add")
+            await chat.until(pilot, lambda: chat.idle(app) and chat.messages(app) == 2)
+            first = app.harness.session.id if app.harness else ""
+            await chat.send(pilot, "/compact")
+            await chat.until(pilot, lambda: "compacted" in chat.shown(app))
+            await chat.send(pilot, "keep going")
+            await chat.until(pilot, lambda: chat.messages(app) == 2)
+
+            assert app.harness is not None
+            opening = str(app.harness.session.messages[0].content)
+
+        assert app.harness is None or app.harness.session.id != first
+        assert "Goal: fix add in calc.py." in opening and opening.endswith("keep going")
+        assert len(sessions.all()) == 2
+
+
+class TestActivityLine:
+    async def test_it_sits_under_the_message_until_the_turn_ends(self, chat: Chat) -> None:
+        llm = StallingLlm([])
+        app = chat.app(llm)
+
+        async with app.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(app))
+            await chat.send(pilot, "think hard")
+            await chat.until(pilot, llm.stalled.is_set)
+
+            last = list(app.query("#transcript > *"))[-1]
+            assert isinstance(last, ActivityLine) and "Thinking" in str(last.render())
+
+            await pilot.press("escape")
+            await chat.until(pilot, lambda: chat.idle(app))
+
+            assert not app.query(ActivityLine)
+
+
+class TestGlyphs:
+    def test_wide_emoji_become_one_cell_symbols(self) -> None:
+        assert Glyphs.narrow(
+            "done \u2705 failed \u274c warn \u26a0\ufe0f hi \U0001f44b \u4e2d"
+        ) == ("done \u2713 failed \u2717 warn \u26a0 hi  \u4e2d")
+
+
+class TestResumePicker:
+    async def test_resume_lists_earlier_sessions_and_switches_to_one(self, chat: Chat) -> None:
+        first = chat.app(ScriptedLlm([Reply.text("Noted.")]))
+
+        async with first.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(first))
+            await chat.send(pilot, "the earlier one")
+            await chat.until(pilot, lambda: chat.messages(first) == 2)
+            await pilot.press("ctrl+d")
+
+        second = chat.app(ScriptedLlm([]))
+
+        async with second.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(second))
+            await chat.send(pilot, "/resume")
+            await chat.until(pilot, lambda: bool(second.query(SessionPicker)))
+
+            assert "the earlier one" in str(
+                second.query_one(SessionPicker).get_option_at_index(0).prompt
+            )
+
+            await pilot.press("enter")
+            await chat.until(pilot, lambda: chat.idle(second) and chat.messages(second) == 2)
+
+            assert "the earlier one" in chat.shown(second)

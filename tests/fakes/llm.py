@@ -51,6 +51,9 @@ class ScriptedLlm:
     async def close(self) -> None:
         return None
 
+    async def models(self) -> list[str]:
+        return ["scripted/one", "scripted/two"]
+
     async def complete(self, request: ModelRequest) -> ModelReply:
         index = len(self.requests)
         self.requests.append(request)

@@ -11,7 +11,7 @@ from anthropic import (
 )
 from anthropic.types.beta import BetaMessage
 
-from juno.config import ModelSettings
+from juno.config import ModelNames, ModelSettings
 from juno.domain.values import ModelReply, ModelRequest, StopReason, Usage
 from juno.ports import ModelRejected
 
@@ -87,7 +87,7 @@ class AnthropicClient:
     def params(self, request: ModelRequest) -> dict[str, Any]:
         betas = [self.FALLBACK_BETA]
         params: dict[str, Any] = {
-            "model": self._settings.name,
+            "model": ModelNames.anthropic(self._settings.name),
             "max_tokens": self._settings.max_tokens,
             "system": request.system,
             "messages": [message.model_dump(mode="json") for message in request.messages],
@@ -123,6 +123,14 @@ class AnthropicClient:
             ) from error
 
         return self.reply(message)
+
+    async def models(self) -> list[str]:
+        try:
+            listed = [model.id async for model in self._client.models.list(lifecycle=["active"])]
+        except Exception:
+            listed = list(AnthropicPrices.PER_MILLION)
+
+        return [ModelNames.openrouter(model) for model in listed]
 
     async def close(self) -> None:
         await self._client.close()

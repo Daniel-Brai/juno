@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
@@ -14,11 +14,21 @@ from juno.adapters.sandboxes.local import LocalSandbox
 from juno.adapters.sandboxes.podman import PodmanSandbox
 from juno.adapters.stores.sqlite import SqliteStore
 from juno.adapters.system import SystemClock, SystemProbe
-from juno.config import HarnessConfig
+from juno.adapters.web import HttpFetcher
+from juno.config import HarnessConfig, McpServer, ModelNames
 from juno.domain.events import Event, SessionStarted, TurnContinued
 from juno.domain.session import Session
-from juno.domain.values import Job, RunPaths, Submission, Task, Usage
-from juno.ports import Approver, Checkpointer, Clock, LlmClient, ResourceProbe, Sandbox
+from juno.domain.values import Job, RemoteTool, RunPaths, Submission, Task, Usage
+from juno.ports import (
+    Approver,
+    Checkpointer,
+    Clock,
+    LlmClient,
+    McpGateway,
+    ResourceProbe,
+    Sandbox,
+    WebFetcher,
+)
 from juno.service.bus import MessageBus
 from juno.service.context import RunContext
 from juno.service.drivers import ContinueDriver, TurnDriver
@@ -31,6 +41,7 @@ from juno.tools.approvals import Approvals
 from juno.tools.bash import BashTools
 from juno.tools.editor import EditorTools
 from juno.tools.jobs import JobTools
+from juno.tools.mcp import McpTools
 from juno.tools.middleware import ContainErrors, EmitEvents, TruncateOutput
 from juno.tools.permissions import Permissions
 from juno.tools.registry import Middleware, ToolRegistry, Toolset
@@ -38,6 +49,7 @@ from juno.tools.search import SearchTools
 from juno.tools.submissions import SubmissionTools
 from juno.tools.system import SystemTools
 from juno.tools.todo import TodoTools
+from juno.tools.web import WebTools
 from juno.tools.workspace import Workspace
 
 
@@ -48,6 +60,7 @@ class Adapters:
     probe: ResourceProbe | None = None
     sandbox: Sandbox | None = None
     checkpointer: Checkpointer | None = None
+    fetcher: WebFetcher | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +69,37 @@ class ChatSetup:
     approver: Approver
     permissions: Permissions
     instructions: str | None = None
+    system: str | None = None
     log: bool = False
+    mcp: Mapping[str, McpServer] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Connected:
+    gateway: McpGateway | None = None
+    tools: tuple[RemoteTool, ...] = ()
+    problems: tuple[str, ...] = ()
+
+    @classmethod
+    async def to(cls, servers: Mapping[str, McpServer]) -> Connected:
+        if not servers:
+            return cls()
+
+        try:
+            from juno.adapters.mcp import McpServers
+        except ImportError:
+            return cls(problems=("MCP servers need the mcp extra: uv sync --extra mcp",))
+
+        gateway = McpServers(servers)
+        problems = await gateway.connect()
+
+        try:
+            tools = await gateway.tools()
+        except Exception as error:
+            problems.append(f"could not list MCP tools: {error}")
+            tools = []
+
+        return cls(gateway=gateway, tools=tuple(tools), problems=tuple(problems))
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +118,10 @@ class Profile(Protocol):
     todo: TodoTools | None
     chat: bool
     log: bool
+    system_tool: bool
+    strict_replay: bool
+    gateway: McpGateway | None
+    warnings: tuple[str, ...]
 
     def middleware(
         self, context: RunContext, read_only: Callable[[str], bool], /
@@ -97,6 +144,10 @@ class TaskProfile:
         self.todo: TodoTools | None = None
         self.chat = False
         self.log = True
+        self.system_tool = True
+        self.strict_replay = True
+        self.gateway: McpGateway | None = None
+        self.warnings: tuple[str, ...] = ()
         self._task = task
 
     def middleware(
@@ -133,12 +184,17 @@ class TaskProfile:
 class ChatProfile:
     CHECKPOINTS: ClassVar[str] = "checkpoints.git"
 
-    def __init__(self, setup: ChatSetup) -> None:
+    def __init__(self, setup: ChatSetup, connected: Connected) -> None:
         self.task: Task | None = None
         self.todo: TodoTools | None = TodoTools()
         self.chat = True
         self.log = setup.log
+        self.system_tool = False
+        self.strict_replay = False
+        self.gateway = connected.gateway
+        self.warnings = connected.problems
         self._setup = setup
+        self._remote = connected.tools
 
     def middleware(
         self, context: RunContext, read_only: Callable[[str], bool], /
@@ -149,12 +205,16 @@ class ChatProfile:
         return [approvals]
 
     def toolsets(
-        self, _opened: Opened, _context: RunContext, workspace: Workspace, /
+        self, opened: Opened, _context: RunContext, workspace: Workspace, /
     ) -> list[Toolset]:
-        return [SearchTools(workspace), *([self.todo] if self.todo else [])]
+        web = WebTools(opened.adapters.fetcher or HttpFetcher())
+        remote = [McpTools(self.gateway, self._remote)] if self.gateway else []
+        return [SearchTools(workspace), web, *([self.todo] if self.todo else []), *remote]
 
     def prompts(self, opened: Opened, _sandbox: Sandbox, /) -> Prompts:
-        return ChatPrompts(str(opened.paths.workspace), self._setup.instructions)
+        return ChatPrompts(
+            str(opened.paths.workspace), self._setup.instructions, saved=self._setup.system
+        )
 
     def driver(self, _clock: Clock, /) -> TurnDriver:
         return self._setup.driver
@@ -189,6 +249,8 @@ class Harness:
     todo: TodoTools | None = None
     checkpointer: Checkpointer | None = None
     chat: bool = False
+    mcp: McpGateway | None = None
+    warnings: tuple[str, ...] = ()
 
     @classmethod
     async def start(
@@ -233,14 +295,19 @@ class Harness:
             cost_limit=config.budget.max_cost,
             setup={
                 **cls.setup_of(config),
-                "chat": {"project": str(project), "instructions": chat.instructions},
+                "chat": {
+                    "project": str(project),
+                    "instructions": chat.instructions,
+                    "system": ChatPrompts(str(project), chat.instructions).system(),
+                },
             },
         )
         store = await cls.open_store(paths)
 
         try:
+            connected = await Connected.to(chat.mcp)
             opened = Opened(config, paths, adapters, clock, store, session)
-            return await cls._assemble(opened, ChatProfile(chat))
+            return await cls._assemble(opened, ChatProfile(chat, connected))
         except BaseException:
             await store.close()
             raise
@@ -259,17 +326,20 @@ class Harness:
             if session is None:
                 raise FileNotFoundError(f"no session to resume in {paths.root}")
 
-            stored = session.setup.get("chat", {}).get("instructions")
-            chat = ChatSetup(
+            stored = session.setup.get("chat", {})
+            restored = ChatSetup(
                 driver=chat.driver,
                 approver=chat.approver,
                 permissions=chat.permissions,
-                instructions=stored,
+                instructions=stored.get("instructions"),
+                system=stored.get("system"),
                 log=chat.log,
+                mcp=chat.mcp,
             )
             clock = adapters.clock or SystemClock()
+            connected = await Connected.to(chat.mcp)
             opened = Opened(config, paths, adapters, clock, store, session, jobs)
-            harness = await cls._assemble(opened, ChatProfile(chat))
+            harness = await cls._assemble(opened, ChatProfile(restored, connected))
             await harness.loop.journal.restore(session)
 
             if harness.todo is not None:
@@ -354,7 +424,9 @@ class Harness:
 
             return OpenRouterClient(model, api_key=key, session_id=session.id)
 
-        if config.budget.max_cost is not None and not AnthropicPrices.knows(model.name):
+        native = ModelNames.anthropic(model.name)
+
+        if config.budget.max_cost is not None and not AnthropicPrices.knows(native):
             raise ValueError(
                 f"budget.max_cost needs a price for {model.name}, and juno has none; "
                 "drop the cost cap or use a priced model"
@@ -412,6 +484,9 @@ class Harness:
     async def close(self) -> None:
         for client in {id(self.llm): self.llm, id(self.loop.llm): self.loop.llm}.values():
             await client.close()
+
+        if self.mcp is not None:
+            await self.mcp.close()
 
         await self.store.close()
 
@@ -476,11 +551,17 @@ class Harness:
         if jobs is not None:
             registry.register(jobs)
 
-        if config.flags.tools.system:
+        if config.flags.tools.system and profile.system_tool:
             registry.register(SystemTools(probe, context))
 
         prompts = profile.prompts(opened, sandbox)
-        journal = Journal(transactions, registry=registry, prompts=prompts, clock=clock)
+        journal = Journal(
+            transactions,
+            registry=registry,
+            prompts=prompts,
+            clock=clock,
+            strict=profile.strict_replay,
+        )
         EventRecorder(transactions).attach(bus)
 
         if profile.log:
@@ -521,4 +602,6 @@ class Harness:
             todo=profile.todo,
             checkpointer=checkpointer,
             chat=profile.chat,
+            mcp=profile.gateway,
+            warnings=profile.warnings,
         )

@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 
 from juno.domain.events import Event
 from juno.domain.session import Session
@@ -13,12 +13,15 @@ from juno.domain.values import (
     MessageRecord,
     ModelReply,
     ModelRequest,
+    RemoteResult,
+    RemoteTool,
     ResourceSnapshot,
     Submission,
     ToolCall,
     ToolCallRecord,
     ToolCallStatus,
     ToolResult,
+    WebPage,
 )
 
 
@@ -26,8 +29,26 @@ class ModelRejected(Exception):
     pass
 
 
+class FetchFailed(Exception):
+    pass
+
+
+class McpGateway(Protocol):
+    async def tools(self) -> list[RemoteTool]: ...
+
+    async def call(self, server: str, name: str, args: dict[str, Any], /) -> RemoteResult: ...
+
+    async def close(self) -> None: ...
+
+
+class WebFetcher(Protocol):
+    async def fetch(self, url: str) -> WebPage: ...
+
+
 class LlmClient(Protocol):
     async def complete(self, request: ModelRequest) -> ModelReply: ...
+
+    async def models(self) -> list[str]: ...
 
     async def close(self) -> None: ...
 

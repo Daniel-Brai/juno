@@ -21,7 +21,7 @@ class TestDefaults:
     def test_match_the_papers_best_configuration(self) -> None:
         config = HarnessConfig()
 
-        assert config.model == ModelSettings(name="claude-opus-5-5", effort="high")
+        assert config.model == ModelSettings(name="anthropic/claude-opus-5.5", effort="high")
         assert config.budget.total == 86_400
         assert (
             config.flags.tools.system and config.flags.tools.jobs and config.flags.tools.submission

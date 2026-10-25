@@ -4,7 +4,7 @@ from typing import Any, ClassVar
 
 import httpx
 
-from juno.config import ModelSettings
+from juno.config import ModelNames, ModelSettings
 from juno.domain.values import (
     ContentBlock,
     Message,
@@ -24,6 +24,7 @@ class OpenRouterError(Exception):
 
 class OpenRouterClient:
     URL: ClassVar[str] = "https://openrouter.ai/api/v1/chat/completions"
+    MODELS_URL: ClassVar[str] = "https://openrouter.ai/api/v1/models"
     REASONING: ClassVar[str] = "openrouter_reasoning"
     RETRY_STATUSES: ClassVar[frozenset[int]] = frozenset({408, 429, 500, 502, 503, 504})
     FATAL_STATUSES: ClassVar[frozenset[int]] = frozenset({400, 401, 402, 403, 404})
@@ -54,7 +55,7 @@ class OpenRouterClient:
 
     def payload(self, request: ModelRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self._settings.name,
+            "model": ModelNames.openrouter(self._settings.name),
             "max_tokens": self._settings.max_tokens,
             "messages": [
                 {"role": "system", "content": request.system},
@@ -67,7 +68,7 @@ class OpenRouterClient:
         if self._session_id is not None:
             payload["session_id"] = self._session_id
 
-        if self._settings.name.startswith("anthropic/"):
+        if ModelNames.is_anthropic(self._settings.name):
             payload["cache_control"] = {"type": "ephemeral"}
 
         return payload
@@ -85,6 +86,15 @@ class OpenRouterClient:
             raise OpenRouterError(f"openrouter error: {error}")
 
         return self.reply(body)
+
+    async def models(self) -> list[str]:
+        try:
+            response = await self._http.get(self.MODELS_URL, headers=self._headers)
+            response.raise_for_status()
+            listed = (str(model["id"]) for model in response.json().get("data", []))
+            return sorted(model for model in listed if ":" not in model)
+        except httpx.HTTPError, ValueError, KeyError:
+            return []
 
     async def close(self) -> None:
         await self._http.aclose()

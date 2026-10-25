@@ -16,6 +16,7 @@ from juno.config import DottedKeys, Durations, HarnessConfig
 from juno.domain.events import Event
 from juno.domain.session import Session, State
 from juno.domain.values import Role, RunPaths
+from juno.entrypoints.attachments import Attachments
 from juno.eval.experiment import Experiment
 from juno.eval.grading import Grader, GradingError, RunGrade
 from juno.eval.report import EvalReport, EvalStatus, Scorecard
@@ -41,7 +42,7 @@ class ModelOptions:
     """Model provider."""
 
     model: str | None = None
-    """Model name, e.g. claude-opus-5-5 or an OpenRouter model id."""
+    """Model id as OpenRouter names it, e.g. anthropic/claude-opus-5.5 or deepseek/deepseek-v4-flash."""
 
     effort: Effort | None = None
     """Reasoning effort."""
@@ -229,15 +230,26 @@ class JunoCli:
         if printing.prompt is None:
             from juno.entrypoints.tui import ChatLauncher, JunoApp
 
-            launcher = ChatLauncher(config=config, sessions=sessions, permissions=permissions)
+            launcher = ChatLauncher(
+                config=config,
+                sessions=sessions,
+                permissions=permissions,
+                mcp=sessions.mcp_servers(self.user_config_dir()),
+            )
             await JunoApp(launcher, resume=previous).run_async()
             return 0
 
+        expanded = Attachments(sessions.project).expand(printing.prompt)
+
+        for problem in expanded.skipped:
+            print(f"juno: not attached: {problem}", file=sys.stderr)
+
         setup = ChatSetup(
-            driver=ScriptDriver([printing.prompt]),
+            driver=ScriptDriver([expanded.text]),
             approver=RulesOnly(yes=printing.yes),
             permissions=permissions,
             instructions=sessions.instructions(),
+            mcp=sessions.mcp_servers(self.user_config_dir()),
         )
         opener = Harness.resume_chat if previous is not None else Harness.start_chat
         paths = previous or sessions.new()
@@ -245,6 +257,9 @@ class JunoCli:
         async with await opener(
             config=config, chat=setup, paths=paths, adapters=Adapters()
         ) as harness:
+            for warning in harness.warnings:
+                print(f"juno: {warning}", file=sys.stderr)
+
             if printing.output == "json":
                 harness.bus.subscribe(Event, self.print_event)
 

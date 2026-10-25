@@ -33,7 +33,7 @@ class Rule(BaseModel):
     action: Action
 
     def applies(self, call: ToolCall) -> bool:
-        if self.tool not in {"*", call.name}:
+        if not fnmatchcase(call.name, self.tool):
             return False
 
         command = call.args.get("command")
@@ -85,6 +85,7 @@ class Permissions:
     )
     READS: ClassVar[Mapping[str, frozenset[str]]] = {"editor": frozenset({"view"})}
     EDITS: ClassVar[frozenset[str]] = frozenset({"editor"})
+    LOOKUPS: ClassVar[frozenset[str]] = frozenset({"web_fetch"})
 
     def __init__(
         self, *, mode: Mode = Mode.ASK, rules: Sequence[Rule] = (), store: Path | None = None
@@ -115,6 +116,8 @@ class Permissions:
         match self.mode:
             case Mode.YOLO:
                 return Action.ALLOW, "yolo mode allows everything"
+            case Mode.PLAN if call.name in self.LOOKUPS:
+                return Action.ALLOW, "plan mode allows looking things up"
             case Mode.PLAN:
                 return Action.DENY, "plan mode is read-only"
             case Mode.ACCEPT_EDITS if call.name in self.EDITS:

@@ -74,9 +74,11 @@ class Journal:
         registry: ToolRegistry,
         prompts: Prompts,
         clock: Clock,
+        strict: bool = True,
     ) -> None:
         self._transactions = transactions
         self._clock = clock
+        self._strict = strict
         self._registry = registry
         self._prompts = prompts
         self._persisted = 0
@@ -128,7 +130,9 @@ class Journal:
         history = self._empty_history()
 
         for record in records:
-            if record.request_hash is not None and record.request_hash != history.value:
+            stale = record.request_hash is not None and record.request_hash != history.value
+
+            if stale and self._strict:
                 raise ReplayDivergence(record.index)
 
             history.add(record.message)

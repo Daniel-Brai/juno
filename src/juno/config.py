@@ -127,11 +127,54 @@ class Flags(Section):
         return Flags.model_validate(DottedKeys.merge(self.model_dump(), DottedKeys.nest(overrides)))
 
 
+class ModelNames:
+    ANTHROPIC: ClassVar[str] = "anthropic/"
+
+    @classmethod
+    def openrouter(cls, name: str) -> str:
+        if "/" in name or not name.startswith("claude-"):
+            return name
+
+        parts = name.split("-")
+        version: list[str] = []
+
+        while parts and parts[-1].isdigit() and len(version) < 2:
+            version.insert(0, parts.pop())
+
+        return f"{cls.ANTHROPIC}{'-'.join([*parts, '.'.join(version)]) if version else name}"
+
+    @classmethod
+    def anthropic(cls, name: str) -> str:
+        return name.removeprefix(cls.ANTHROPIC).partition(":")[0].replace(".", "-")
+
+    @classmethod
+    def is_anthropic(cls, name: str) -> bool:
+        return cls.openrouter(name).startswith(cls.ANTHROPIC)
+
+
 class ModelSettings(Section):
     provider: Literal["anthropic", "openrouter"] = "anthropic"
-    name: str = "claude-opus-5-5"
+    name: str = "anthropic/claude-opus-5.5"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     max_tokens: int = Field(default=64_000, ge=1_024)
+
+
+class McpServer(Section):
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None
+
+    @model_validator(mode="after")
+    def _one_way_in(self) -> McpServer:
+        if (self.command is None) == (self.url is None):
+            raise ValueError("an MCP server needs either a command or a url")
+
+        return self
+
+
+class McpFile(Section):
+    servers: dict[str, McpServer] = Field(default_factory=dict)
 
 
 class BudgetSettings(Section):

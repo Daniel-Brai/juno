@@ -1,15 +1,18 @@
 import hashlib
 import os
+import tomllib
 from pathlib import Path
 from typing import ClassVar
 from uuid import uuid7
 
+from juno.config import McpFile, McpServer
 from juno.domain.values import RunPaths
 
 
 class ProjectSessions:
     INSTRUCTIONS: ClassVar[tuple[str, ...]] = ("AGENTS.md", ".juno/instructions.md")
     DATABASE: ClassVar[str] = "run.db"
+    MCP: ClassVar[str] = "mcp.toml"
 
     def __init__(self, project: Path, data_home: Path | None = None) -> None:
         self.project = project.resolve()
@@ -43,6 +46,15 @@ class ProjectSessions:
             if folder.is_dir() and (folder / self.DATABASE).is_file()
         )
         return [self._paths(folder.name) for folder in folders]
+
+    def mcp_servers(self, user_dir: Path) -> dict[str, McpServer]:
+        servers: dict[str, McpServer] = {}
+
+        for path in (user_dir / self.MCP, self.project / ".juno" / self.MCP):
+            if path.is_file():
+                servers |= McpFile.model_validate(tomllib.loads(path.read_text())).servers
+
+        return servers
 
     def instructions(self) -> str | None:
         for name in self.INSTRUCTIONS:

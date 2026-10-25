@@ -12,7 +12,7 @@ from juno.bootstrap import Adapters, ChatSetup, Harness
 from juno.config import HarnessConfig, SandboxSettings
 from juno.domain.events import ApprovalDecided, Event
 from juno.domain.session import Session, State
-from juno.domain.values import Role, RunPaths
+from juno.domain.values import ModelReply, ModelRequest, Role, RunPaths
 from juno.entrypoints.cli import JunoCli, PrintOptions, SessionChoice
 from juno.ports import LlmClient
 from juno.projects import ProjectSessions
@@ -257,6 +257,24 @@ class TestChatCli:
         assert (code, out.out) == (0, "Fixed it.\n")
         assert "juno: session " in out.err
         assert "a + b" in (project / "calc.py").read_text()
+
+    async def test_print_mode_attaches_named_files(
+        self, scripted: list[list[Turn]], project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        seen: list[str] = []
+
+        def answer(request: ModelRequest) -> ModelReply:
+            seen.append(str(request.messages[0].content))
+            return Reply.text("It subtracts.")
+
+        scripted.append([answer])
+
+        await JunoCli().chat(
+            printing=PrintOptions(prompt="what is wrong with @calc.py?"), project=project
+        )
+
+        assert capsys.readouterr().out == "It subtracts.\n"
+        assert '<file path="calc.py">\ndef add(a, b):\n    return a - b\n</file>' in seen[0]
 
     async def test_print_mode_streams_json_events(
         self, scripted: list[list[Turn]], project: Path, capsys: pytest.CaptureFixture[str]

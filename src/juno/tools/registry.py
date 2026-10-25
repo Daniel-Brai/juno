@@ -26,10 +26,13 @@ class Tool[C: Command]:
     handler: Callable[[C], Awaitable[str]]
     idempotent: bool = False
     read_only: bool = False
+    schema: dict[str, Any] | None = None
 
     @property
     def spec(self) -> ToolSpec:
-        schema = self.input_model.model_json_schema()
+        schema = (
+            dict(self.schema) if self.schema is not None else self.input_model.model_json_schema()
+        )
         schema.pop("title", None)
         return ToolSpec(name=self.name, description=self.description, input_schema=schema)
 

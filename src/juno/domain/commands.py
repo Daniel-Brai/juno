@@ -1,6 +1,7 @@
-from typing import Literal
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, field_validator
 
 from juno.domain.values import Value
 
@@ -108,3 +109,26 @@ class TodoItem(Value):
 
 class UpdateTodos(Command):
     items: list[TodoItem] = Field(description="The whole list; it replaces the previous one.")
+
+
+class RemoteArgs(Command):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    @property
+    def values(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class FetchUrl(Command):
+    url: str = Field(description="An http or https address.")
+    max_chars: int = Field(default=20_000, ge=500, le=100_000, description="Most text to return.")
+
+    @field_validator("url")
+    @classmethod
+    def _web_address(cls, url: str) -> str:
+        parts = urlsplit(url.strip())
+
+        if parts.scheme not in {"http", "https"} or not parts.netloc:
+            raise ValueError("expected an http or https address")
+
+        return url.strip()

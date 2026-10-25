@@ -50,6 +50,20 @@ class RunFolder:
         records = (MessageRecord.model_validate_json(row[0]) for row in rows)
         return sum((record.usage for record in records if record.usage is not None), Usage())
 
+    def opening(self, session_id: str) -> tuple[int, str]:
+        with self._connect() as db:
+            (count,) = db.execute(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,)
+            ).fetchone()
+            row = db.execute(
+                "SELECT data_json FROM messages WHERE session_id = ? AND role = 'user' "
+                "ORDER BY idx LIMIT 1",
+                (session_id,),
+            ).fetchone()
+
+        content = MessageRecord.model_validate_json(row[0]).message.content if row else ""
+        return count, content if isinstance(content, str) else ""
+
     def task(self) -> Task:
         return TaskFolder.from_run(self.paths)
 

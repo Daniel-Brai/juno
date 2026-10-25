@@ -52,19 +52,33 @@ class ChatPrompts:
         "code before changing it, make the smallest change that does the job, and run the "
         "project's checks or tests when they exist.\n\n"
         "How to work:\n"
+        "- Answer greetings, questions about yourself and anything the conversation already "
+        "covers directly, without tools. Look at the project only when the request needs it, "
+        "and then only at what it needs.\n"
         "- Use glob, grep and read to find your way around; use bash for anything else.\n"
         "- Edit files with the editor tool, never with shell redirection.\n"
         "- Keep a todo list for work with several steps, and update it as you go.\n"
         "- Some calls need the user's approval. If one is denied, take that as an answer and "
         "do not try the same thing another way.\n"
-        "- When you are done, say what changed and what you could not check."
+        "- When you are done, say what changed and what you could not check.\n\n"
+        "How to write:\n"
+        "- Write the way a thoughtful colleague talks: plain sentences, short paragraphs, "
+        "no filler or hype.\n"
+        "- Do not use em dashes or en dashes. Use a comma, a full stop or brackets instead.\n"
+        "- Skip decorative formatting. Use a list, a table, bold text or a heading only when "
+        "it makes something clearer, such as steps to follow or values to compare.\n"
+        "- Put code, commands, paths and identifiers in backticks."
     )
 
-    def __init__(self, project: str, instructions: str | None) -> None:
+    def __init__(self, project: str, instructions: str | None, *, saved: str | None = None) -> None:
         self._project = project
         self._instructions = instructions
+        self._saved = saved
 
     def system(self) -> str:
+        if self._saved is not None:
+            return self._saved
+
         parts = [self.SYSTEM, f"The project is in {self._project}."]
 
         if self._instructions:

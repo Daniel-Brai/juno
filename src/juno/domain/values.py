@@ -205,6 +205,24 @@ class Task(Value):
     submission_file: str = "submission.csv"
 
 
+class RemoteTool(Value):
+    server: str
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class RemoteResult(Value):
+    text: str
+    is_error: bool = False
+
+
+class WebPage(Value):
+    url: str
+    content_type: str
+    text: str
+
+
 class RunPaths(Value):
     root: Path
     project: Path | None = None
