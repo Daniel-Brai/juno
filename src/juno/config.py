@@ -157,6 +157,7 @@ class ModelSettings(Section):
     name: str = "anthropic/claude-opus-5.5"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     max_tokens: int = Field(default=64_000, ge=1_024)
+    compact_at: float | None = Field(default=0.8, gt=0, le=1)
 
 
 class McpServer(Section):

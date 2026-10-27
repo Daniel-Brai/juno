@@ -12,9 +12,9 @@ from fakes.clock import FakeClock
 from fakes.llm import Reply, ScriptedLlm, Turn
 from fakes.probe import FakeProbe
 from juno.bootstrap import Adapters
-from juno.config import HarnessConfig, SandboxSettings
+from juno.config import HarnessConfig, ModelSettings, SandboxSettings
 from juno.domain.session import State
-from juno.domain.values import ModelReply, ModelRequest, Role
+from juno.domain.values import ModelReply, ModelRequest, Role, Usage
 from juno.entrypoints.tui import (
     ActivityLine,
     ApprovalPrompt,
@@ -71,9 +71,13 @@ class Chat:
     def __init__(self, sessions: ProjectSessions) -> None:
         self.sessions = sessions
 
-    def app(self, llm: ScriptedLlm, *, resume: bool = False) -> JunoApp:
+    def app(
+        self, llm: ScriptedLlm, *, resume: bool = False, model: str = "anthropic/claude-opus-5.5"
+    ) -> JunoApp:
         launcher = ChatLauncher(
-            config=HarnessConfig(sandbox=SandboxSettings(kind="local")),
+            config=HarnessConfig(
+                sandbox=SandboxSettings(kind="local"), model=ModelSettings(name=model)
+            ),
             sessions=self.sessions,
             permissions=Permissions.load(self.sessions.project, self.sessions.root / "user"),
             adapters=Adapters(llm=llm, clock=FakeClock(), probe=FakeProbe()),
@@ -330,6 +334,36 @@ class TestCompact:
 
         assert app.harness is None or app.harness.session.id != first
         assert "Goal: fix add in calc.py." in opening and opening.endswith("keep going")
+        assert len(sessions.all()) == 2
+
+
+class TestAutoCompact:
+    async def test_a_nearly_full_context_compacts_by_itself(
+        self, chat: Chat, sessions: ProjectSessions
+    ) -> None:
+        full = Usage(input_tokens=9_000, output_tokens=10)
+        turns: list[Turn] = [
+            Reply.text("Long answer.", usage=full),
+            Reply.text("Summary: the user asked for a long answer."),
+            Reply.text("Carrying on."),
+        ]
+        app = chat.app(ScriptedLlm(turns), model="scripted/one")
+
+        async with app.run_test() as pilot:
+            await chat.until(pilot, lambda: chat.idle(app) and bool(app._models))
+            await chat.send(pilot, "go long")
+            await chat.until(pilot, lambda: "compacted" in chat.shown(app))
+
+            assert "the context was 90% full" in chat.shown(app)
+
+            await chat.send(pilot, "and then?")
+            await chat.until(pilot, lambda: chat.messages(app) == 2)
+
+            assert app.harness is not None
+            assert "the user asked for a long answer" in str(
+                app.harness.session.messages[0].content
+            )
+
         assert len(sessions.all()) == 2
 
 

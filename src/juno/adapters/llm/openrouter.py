@@ -8,6 +8,7 @@ from juno.config import ModelNames, ModelSettings
 from juno.domain.values import (
     ContentBlock,
     Message,
+    ModelCard,
     ModelReply,
     ModelRequest,
     Role,
@@ -87,14 +88,19 @@ class OpenRouterClient:
 
         return self.reply(body)
 
-    async def models(self) -> list[str]:
+    async def models(self) -> list[ModelCard]:
         try:
             response = await self._http.get(self.MODELS_URL, headers=self._headers)
             response.raise_for_status()
-            listed = (str(model["id"]) for model in response.json().get("data", []))
-            return sorted(model for model in listed if ":" not in model)
+            cards = [
+                ModelCard(name=str(model["id"]), context=model.get("context_length"))
+                for model in response.json().get("data", [])
+                if ":" not in str(model["id"])
+            ]
         except httpx.HTTPError, ValueError, KeyError:
             return []
+
+        return sorted(cards, key=lambda card: card.name)
 
     async def close(self) -> None:
         await self._http.aclose()

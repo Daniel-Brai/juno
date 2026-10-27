@@ -36,7 +36,16 @@ from juno.domain.events import (
     ToolStarted,
 )
 from juno.domain.session import Session
-from juno.domain.values import Answer, Message, Role, RunPaths, ToolCall, ToolResult, Usage
+from juno.domain.values import (
+    Answer,
+    Message,
+    ModelCard,
+    Role,
+    RunPaths,
+    ToolCall,
+    ToolResult,
+    Usage,
+)
 from juno.entrypoints.attachments import Attachments
 from juno.eval.runs import RunFolder
 from juno.ports import ModelRejected
@@ -565,6 +574,8 @@ class JunoApp(App[None]):
         Binding("ctrl+d", "quit", "Quit"),
     ]
     PROVIDERS: ClassVar[tuple[str, ...]] = ("anthropic", "openrouter")
+    SETTLE_TRIES: ClassVar[int] = 100
+    SETTLE_S: ClassVar[float] = 0.05
     KEYS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("Enter", "send; picks the highlighted entry when the menu is open"),
         ("Shift+Enter, Ctrl+J", "new line"),
@@ -591,7 +602,7 @@ class JunoApp(App[None]):
         self._note: str | None = None
         self._prompt: ApprovalPrompt | None = None
         self._line: ActivityLine | None = None
-        self._models: list[str] = []
+        self._models: list[ModelCard] = []
 
         listed = [
             SlashCommand("help", "list keys and commands", self._help),
@@ -600,7 +611,7 @@ class JunoApp(App[None]):
                 "switch model from the next turn",
                 self._model,
                 "NAME",
-                choices=lambda: self._models,
+                choices=lambda: [card.name for card in self._models],
                 current=lambda: self.launcher.config.model.name,
             ),
             SlashCommand(
@@ -887,6 +898,9 @@ class JunoApp(App[None]):
         )
         self._set_activity("working" if calls else "ready")
 
+        if not calls and (fullness := self._fullness()) is not None:
+            self.run_worker(self._auto_compact(fullness), group="compact", exit_on_error=False)
+
     async def _replay(self, session: Session) -> None:
         for message in session.messages:
             if isinstance(message.content, str) and message.role is Role.USER:
@@ -1139,7 +1153,30 @@ class JunoApp(App[None]):
         if self.harness is not None:
             self._models = await self.harness.loop.llm.models()
 
-    async def _compact(self, focus: str) -> None:
+    def _fullness(self) -> float | None:
+        threshold = self.launcher.config.model.compact_at
+        current = ModelNames.openrouter(self.launcher.config.model.name)
+        window = next(
+            (card.context for card in self._models if ModelNames.openrouter(card.name) == current),
+            None,
+        )
+
+        if threshold is None or not window:
+            return None
+
+        fullness = self._context_tokens / window
+        return fullness if fullness >= threshold else None
+
+    async def _auto_compact(self, fullness: float) -> None:
+        for _ in range(self.SETTLE_TRIES):
+            if not self.busy:
+                break
+
+            await asyncio.sleep(self.SETTLE_S)
+
+        await self._compact("", reason=f"the context was {fullness:.0%} full, so juno compacted it")
+
+    async def _compact(self, focus: str, reason: str = "") -> None:
         if self.harness is None or self.busy:
             await self.notice("wait for the turn to end, or press Esc, before /compact")
             return
@@ -1160,6 +1197,9 @@ class JunoApp(App[None]):
             Markdown(Glyphs.narrow(summary)), title="summary of the earlier session"
         )
         await self._add(block)
+        if reason:
+            await self.notice(reason)
+
         await self.notice("compacted; the summary goes with your next message")
 
     async def _quit(self, _: str) -> None:

@@ -3,7 +3,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, Self
 from uuid import uuid7
 
-from juno.domain.values import ContentBlock, ModelReply, ModelRequest, StopReason, Usage
+from juno.domain.values import ContentBlock, ModelCard, ModelReply, ModelRequest, StopReason, Usage
 
 type Turn = ModelReply | Callable[[ModelRequest], ModelReply]
 
@@ -51,8 +51,8 @@ class ScriptedLlm:
     async def close(self) -> None:
         return None
 
-    async def models(self) -> list[str]:
-        return ["scripted/one", "scripted/two"]
+    async def models(self) -> list[ModelCard]:
+        return [ModelCard(name="scripted/one", context=10_000), ModelCard(name="scripted/two")]
 
     async def complete(self, request: ModelRequest) -> ModelReply:
         index = len(self.requests)

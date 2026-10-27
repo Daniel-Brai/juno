@@ -205,6 +205,11 @@ class Task(Value):
     submission_file: str = "submission.csv"
 
 
+class ModelCard(Value):
+    name: str
+    context: int | None = None
+
+
 class RemoteTool(Value):
     server: str
     name: str

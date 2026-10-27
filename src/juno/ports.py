@@ -11,6 +11,7 @@ from juno.domain.values import (
     CommandResult,
     Job,
     MessageRecord,
+    ModelCard,
     ModelReply,
     ModelRequest,
     RemoteResult,
@@ -48,7 +49,7 @@ class WebFetcher(Protocol):
 class LlmClient(Protocol):
     async def complete(self, request: ModelRequest) -> ModelReply: ...
 
-    async def models(self) -> list[str]: ...
+    async def models(self) -> list[ModelCard]: ...
 
     async def close(self) -> None: ...
 

@@ -12,7 +12,7 @@ from anthropic import (
 from anthropic.types.beta import BetaMessage
 
 from juno.config import ModelNames, ModelSettings
-from juno.domain.values import ModelReply, ModelRequest, StopReason, Usage
+from juno.domain.values import ModelCard, ModelReply, ModelRequest, StopReason, Usage
 from juno.ports import ModelRejected
 
 
@@ -124,13 +124,15 @@ class AnthropicClient:
 
         return self.reply(message)
 
-    async def models(self) -> list[str]:
+    async def models(self) -> list[ModelCard]:
         try:
-            listed = [model.id async for model in self._client.models.list(lifecycle=["active"])]
+            return [
+                ModelCard(name=ModelNames.openrouter(model.id), context=model.max_input_tokens)
+                async for model in self._client.models.list(lifecycle=["active"])
+            ]
         except Exception:
-            listed = list(AnthropicPrices.PER_MILLION)
-
-        return [ModelNames.openrouter(model) for model in listed]
+            known = AnthropicPrices.PER_MILLION
+            return [ModelCard(name=ModelNames.openrouter(name)) for name in known]
 
     async def close(self) -> None:
         await self._client.close()
