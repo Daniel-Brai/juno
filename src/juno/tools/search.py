@@ -98,8 +98,11 @@ class SearchTools:
     def _read(self, args: ReadFile) -> str:
         path = self._workspace.resolve(args.path)
 
+        if path.is_dir():
+            raise ToolError(f"{args.path} is a folder; use glob to list what is in it")
+
         if not path.is_file():
-            raise ToolError(f"{args.path} is not a file")
+            raise ToolError(f"{args.path} does not exist; use glob to find the file first")
 
         data = path.read_bytes()
 

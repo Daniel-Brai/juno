@@ -138,7 +138,12 @@ class TestRead:
     ) -> None:
         (project / "blob.bin").write_bytes(b"\0\1\2")
 
-        for path, message in [("src", "not a file"), ("blob.bin", "binary"), ("../x", "outside")]:
+        for path, message in [
+            ("src", "is a folder"),
+            ("missing.ex", "glob to find"),
+            ("blob.bin", "binary"),
+            ("../x", "outside"),
+        ]:
             with pytest.raises(ToolError, match=message):
                 await search.read(ReadFile(path=path))
 
