@@ -358,7 +358,7 @@ class ToolBlock(Vertical):
         self.running = False
         self._header.update(self._headline(self.FAILED if result.is_error else self.OK))
         self._output.title = f"\u23bf {self.summary(result.content)}"
-        text = result.content
+        text = "" if self.fits_title(result.content) else result.content
 
         if len(text) > self.BODY_LIMIT:
             text = f"{text[: self.BODY_LIMIT]}\n… {len(result.content) - self.BODY_LIMIT} more characters"
@@ -373,6 +373,10 @@ class ToolBlock(Vertical):
             self.running = False
             self._header.update(self._headline(self.RUNNING, dot="\u25a0"))
             self._output.title = "\u23bf stopped"
+
+    @classmethod
+    def fits_title(cls, content: str) -> bool:
+        return "\n" not in content.strip() and len(content.strip()) <= cls.SUMMARY
 
     @classmethod
     def summary(cls, content: str) -> str:
