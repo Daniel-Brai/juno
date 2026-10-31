@@ -29,7 +29,9 @@ class BashTools:
         else:
             after = (
                 f"A command still running after timeout_s (at most {limit}) is not killed; "
-                "it carries on in the background as a job you can job_wait on or job_cancel."
+                "it carries on in the background as a job you can job_wait on or job_cancel. "
+                "For slow commands such as builds and test suites, do not pipe the output "
+                "through grep, tail or head, or you will see nothing until they finish."
             )
 
         return [

@@ -40,7 +40,12 @@ class JobTools:
         return [
             Tool(
                 name="job_submit",
-                description="Start a shell command in the background, e.g. a training run. Output goes to a log file.",
+                description=(
+                    "Start a shell command in the background, e.g. a training run or a test "
+                    "suite. Output goes to a log file. Do not pipe it through grep, tail or head: "
+                    "filtered output only arrives at the end, so the log shows no progress. "
+                    "Search the log afterwards instead."
+                ),
                 input_model=SubmitJob,
                 handler=self.submit,
             ),
