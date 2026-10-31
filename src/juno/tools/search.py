@@ -6,6 +6,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from pathspec import GitIgnoreSpec
+
 from juno.domain.commands import FindFiles, ReadFile, SearchText
 from juno.tools.registry import Tool, ToolError
 from juno.tools.workspace import Workspace
@@ -187,16 +189,28 @@ class SearchTools:
         return await asyncio.to_thread(self._walk, base)
 
     def _walk(self, base: Path) -> list[str]:
+        root = self._workspace.root
+        rules = IgnoreFiles(root)
         found: list[str] = []
 
+        for parent in reversed(base.parents):
+            if parent.is_relative_to(root):
+                rules.enter(parent)
+
         for folder, subfolders, files in os.walk(base):
+            here = Path(folder)
+            rules.enter(here)
             subfolders[:] = [
                 name
                 for name in subfolders
                 if not any(fnmatchcase(name, pattern) for pattern in self.GENERATED)
+                and not rules.ignores(here / name, folder=True)
             ]
-            relative = Path(folder).relative_to(base)
-            found += [(relative / name).as_posix() for name in files]
+            found += [
+                (here / name).relative_to(base).as_posix()
+                for name in files
+                if not rules.ignores(here / name, folder=False)
+            ]
 
         return found
 
@@ -206,3 +220,32 @@ class SearchTools:
         )
         output, errors = await process.communicate()
         return process.returncode or 0, output.decode(errors="replace"), errors.decode()
+
+
+class IgnoreFiles:
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._rules: dict[tuple[str, ...], GitIgnoreSpec] = {}
+
+    def enter(self, folder: Path) -> None:
+        file = folder / ".gitignore"
+
+        if file.is_file():
+            lines = file.read_text(errors="replace").splitlines()
+            self._rules[folder.relative_to(self._root).parts] = GitIgnoreSpec.from_lines(lines)
+
+    def ignores(self, path: Path, *, folder: bool) -> bool:
+        parts = path.relative_to(self._root).parts
+        ignored = False
+
+        for base, spec in self._rules.items():
+            if parts[: len(base)] != base:
+                continue
+
+            inside = "/".join(parts[len(base) :]) + ("/" if folder else "")
+            verdict = spec.check_file(inside).include
+
+            if verdict is not None:
+                ignored = verdict
+
+        return ignored

@@ -60,21 +60,45 @@ class TestGlob:
             "app/.gradle/build.lock",
             "pkg/demo.egg-info/PKG-INFO",
             "secret/key.txt",
+            "web/debug.log",
         ]
 
         for relative in sources + generated:
             (root / relative).parent.mkdir(parents=True, exist_ok=True)
             (root / relative).write_text("x\n")
 
-        (root / ".gitignore").write_text("secret/\n")
+        (root / ".gitignore").write_text("# local\n/secret/\n*.log\n")
 
         if not ripgrep:
             monkeypatch.setattr("juno.tools.search.shutil.which", lambda name: None)
 
         found = await SearchTools(Workspace(root)).glob(FindFiles(pattern="*"))
 
-        ignored_by_file = [] if ripgrep else ["secret/key.txt"]
-        assert sorted(found.splitlines()) == sorted([*sources, ".gitignore", *ignored_by_file])
+        assert sorted(found.splitlines()) == sorted([*sources, ".gitignore"])
+
+    async def test_without_git_or_ripgrep_every_gitignore_rule_applies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "plain"
+        kept = ["secret.md", "docs/guide.md", "lib/secret/notes.md", "logs/keep.log", "app/a.py"]
+        dropped = ["secret/key.txt", "docs/build/page.html", "logs/run.log", "app/cache/x.bin"]
+
+        for relative in kept + dropped:
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / relative).write_text("x\n")
+
+        (root / ".gitignore").write_text("/secret/\ndocs/build\n*.log\n")
+        (root / "logs" / ".gitignore").write_text("!keep.log\n")
+        (root / "app" / ".gitignore").write_text("cache/\n")
+        monkeypatch.setattr("juno.tools.search.shutil.which", lambda name: None)
+        search = SearchTools(Workspace(root))
+
+        found = await search.glob(FindFiles(pattern="*"))
+        inside = await search.glob(FindFiles(pattern="*", path="app"))
+
+        ignores = [".gitignore", "logs/.gitignore", "app/.gitignore"]
+        assert sorted(found.splitlines()) == sorted([*kept, *ignores])
+        assert sorted(inside.splitlines()) == ["app/.gitignore", "app/a.py"]
 
     async def test_inside_git_tracked_vendored_code_is_still_found(
         self, project: Path, search: SearchTools
