@@ -138,6 +138,21 @@ class TestTui:
             assert app.harness is not None
             assert app.harness.session.state is State.AWAITING_CONTINUE
 
+    async def test_a_long_answer_wraps_inside_the_window(self, chat: Chat) -> None:
+        long = "The first compile rebuilds every dependency, and `exla` is heavy. " * 6
+        app = chat.app(ScriptedLlm([Reply.text(long)]))
+
+        async with app.run_test(size=(80, 40)) as pilot:
+            await chat.until(pilot, lambda: chat.idle(app))
+            await chat.send(pilot, "hi")
+            await chat.until(pilot, lambda: chat.messages(app) == 2)
+            await chat.until(pilot, lambda: chat.idle(app))
+            await pilot.pause()
+            answer = app.query_one(".reply Markdown").region
+
+            assert answer.right <= 80
+            assert answer.height > 1
+
     @pytest.mark.parametrize(("key", "fixed"), [("y", True), ("n", False)])
     async def test_an_edit_waits_for_approval(
         self, chat: Chat, project: Path, key: str, fixed: bool

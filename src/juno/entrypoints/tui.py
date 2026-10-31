@@ -558,7 +558,7 @@ class JunoApp(App[None]):
     .user { margin: 1 0 0 0; padding: 0 1; background: $boost; color: $text; }
     .reply { height: auto; margin: 1 0 0 0; }
     .bullet { width: 2; color: $text; }
-    .reply Markdown { margin: 0; padding: 0; }
+    .reply Markdown { width: 1fr; margin: 0; padding: 0; }
     .tool { height: auto; margin: 1 0 0 0; }
     .tool Collapsible { border: none; padding: 0 0 0 2; margin: 0; background: transparent; }
     .tool CollapsibleTitle { color: $text-muted; padding: 0; }
