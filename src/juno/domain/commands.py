@@ -23,7 +23,9 @@ class ResumeSession(Command):
 class RunBash(Command):
     command: str = Field(min_length=1, description="Shell command to run in the workspace.")
     timeout_s: float = Field(
-        default=600, gt=0, description="Seconds before the command and its children are killed."
+        default=600,
+        gt=0,
+        description="Seconds to wait for the command before it moves to the background.",
     )
 
 

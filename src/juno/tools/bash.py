@@ -2,24 +2,41 @@ from juno.config import Durations
 from juno.domain.commands import RunBash
 from juno.ports import Sandbox
 from juno.service.context import RunContext
+from juno.tools.jobs import JobTools
 from juno.tools.registry import Tool, ToolError
 
 
 class BashTools:
-    def __init__(self, sandbox: Sandbox, context: RunContext, *, max_timeout_s: float) -> None:
+    def __init__(
+        self,
+        sandbox: Sandbox,
+        context: RunContext,
+        *,
+        max_timeout_s: float,
+        jobs: JobTools | None = None,
+    ) -> None:
         self._sandbox = sandbox
         self._clock = context.clock
         self._session = context.session
         self._max_timeout_s = max_timeout_s
+        self._jobs = jobs
 
     def tools(self) -> list[Tool[RunBash]]:
+        limit = Durations.format(self._max_timeout_s)
+
+        if self._jobs is None:
+            after = f"Commands are killed after {limit}."
+        else:
+            after = (
+                f"A command still running after timeout_s (at most {limit}) is not killed; "
+                "it carries on in the background as a job you can job_wait on or job_cancel."
+            )
+
         return [
             Tool(
                 name="bash",
                 description=(
-                    "Run a shell command in the workspace and get its exit code and output. "
-                    f"Commands are killed after {Durations.format(self._max_timeout_s)}; "
-                    "start anything longer with job_submit."
+                    f"Run a shell command in the workspace and get its exit code and output. {after}"
                 ),
                 input_model=RunBash,
                 handler=self.run,
@@ -33,6 +50,10 @@ class BashTools:
             raise ToolError("the time budget is spent")
 
         timeout = min(args.timeout_s, self._max_timeout_s, remaining)
+
+        if self._jobs is not None:
+            return await self._jobs.run(args.command, timeout)
+
         result = await self._sandbox.exec(args.command, timeout)
 
         if result.timed_out:

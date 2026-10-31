@@ -62,6 +62,55 @@ class TestBashTools:
             await bash.run(RunBash(command="echo late"))
 
 
+class TestBashWithJobs:
+    @pytest.fixture
+    def jobs(self, sandbox: LocalSandbox, context: RunContext, paths: RunPaths) -> JobTools:
+        return JobTools(sandbox, context, logs_dir=paths.logs, max_running=1)
+
+    @pytest.fixture
+    def bash(
+        self, sandbox: LocalSandbox, context: RunContext, clock: FakeClock, jobs: JobTools
+    ) -> BashTools:
+        session = Session(task_id="t", started_at=clock.now(), deadline=clock.now() + 60)
+        session_context = dataclasses.replace(context, session=session)
+        return BashTools(sandbox, session_context, max_timeout_s=10, jobs=jobs)
+
+    async def test_a_quick_command_answers_and_leaves_nothing_behind(
+        self, bash: BashTools, jobs: JobTools, paths: RunPaths
+    ) -> None:
+        output = await bash.run(RunBash(command="echo ready; exit 3"))
+
+        assert output.startswith("exit code 3")
+        assert output.endswith("ready\n")
+        assert await jobs.queue(ListJobs()) == "no jobs yet"
+        assert list(paths.logs.iterdir()) == []
+
+    async def test_a_slow_command_carries_on_as_a_job(
+        self, bash: BashTools, jobs: JobTools
+    ) -> None:
+        output = await bash.run(
+            RunBash(command="echo compiling; sleep 1; echo built", timeout_s=0.3)
+        )
+        finished = await jobs.wait(WaitJob(job_id="job-1", timeout_s=10))
+
+        assert output.startswith("still running after")
+        assert "in the background as job-1" in output
+        assert output.endswith("compiling")
+        assert "succeeded, exit code 0" in finished
+        assert finished.endswith("built")
+
+    async def test_a_slow_command_is_killed_when_every_job_slot_is_taken(
+        self, bash: BashTools, jobs: JobTools
+    ) -> None:
+        await jobs.submit(SubmitJob(command="sleep 30", name="train"))
+
+        output = await bash.run(RunBash(command="sleep 30", timeout_s=0.3))
+
+        assert "process group killed because 1 jobs are already running" in output
+        assert [job.id for job in await jobs.running()] == ["job-1"]
+        await jobs.cancel_all()
+
+
 class TestJobTools:
     @pytest.fixture
     def jobs(self, sandbox: LocalSandbox, context: RunContext, paths: RunPaths) -> JobTools:

@@ -531,11 +531,6 @@ class Harness:
                 TruncateOutput(),
             ]
         )
-        registry.register(
-            BashTools(sandbox, context, max_timeout_s=config.budget.bash_timeout),
-            EditorTools(workspace),
-            *profile.toolsets(opened, context, workspace),
-        )
         jobs = (
             JobTools(
                 sandbox,
@@ -546,6 +541,11 @@ class Harness:
             )
             if config.flags.tools.jobs
             else None
+        )
+        registry.register(
+            BashTools(sandbox, context, max_timeout_s=config.budget.bash_timeout, jobs=jobs),
+            EditorTools(workspace),
+            *profile.toolsets(opened, context, workspace),
         )
 
         if jobs is not None:

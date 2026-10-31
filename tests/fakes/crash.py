@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fakes.probe import FakeProbe
 from juno.adapters.sandboxes.local import LocalSandbox
-from juno.domain.values import CommandResult, ResourceSnapshot
+from juno.domain.values import CommandResult, Job, ResourceSnapshot
 
 
 class Crash(BaseException):
@@ -19,4 +19,7 @@ class CrashingSandbox(LocalSandbox):
         super().__init__(workspace)
 
     async def exec(self, command: str, timeout_s: float) -> CommandResult:
+        raise Crash("the harness died while a command ran")
+
+    async def spawn(self, command: str, log_path: Path, exit_path: Path) -> Job:
         raise Crash("the harness died while a command ran")

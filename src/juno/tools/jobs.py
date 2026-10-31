@@ -1,7 +1,9 @@
 import asyncio
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, ClassVar
+from uuid import uuid7
 
 from juno.config import Durations
 from juno.domain.commands import CancelJob, InspectJob, ListJobs, SubmitJob, WaitJob
@@ -13,7 +15,9 @@ from juno.tools.registry import Tool, ToolError
 
 class JobTools:
     POLL_S: ClassVar[float] = 0.2
+    RUN_POLL_S: ClassVar[float] = 0.05
     TAIL_BYTES: ClassVar[int] = 65_536
+    OUTPUT_BYTES: ClassVar[int] = 30_000
 
     def __init__(
         self,
@@ -76,7 +80,7 @@ class JobTools:
                 f"{self._max_running} jobs are already running; wait for or cancel one first"
             )
 
-        job_id = f"job-{len(self._jobs) + 1}"
+        job_id = self._next_id()
         spawned = await self._sandbox.spawn(
             args.command, self._logs_dir / f"{job_id}.log", self._logs_dir / f"{job_id}.exit"
         )
@@ -85,6 +89,47 @@ class JobTools:
         )
         await self._save(job)
         return f"started {job.id} ({job.name}), log at {job.log_path}"
+
+    async def run(self, command: str, timeout_s: float) -> str:
+        token = uuid7().hex
+        log_path = self._logs_dir / f"bash-{token}.log"
+        exit_path = self._logs_dir / f"bash-{token}.exit"
+        started = time.monotonic()
+        spawned = await self._sandbox.spawn(command, log_path, exit_path)
+        job = spawned.model_copy(update={"started_at": self._clock.now()})
+
+        try:
+            code = await self._exit_code(job, timeout_s)
+        except asyncio.CancelledError:
+            await self._sandbox.kill_group(job.pgid)
+            raise
+
+        took = Durations.format(time.monotonic() - started)
+
+        if code is not None:
+            output = await asyncio.to_thread(self._read_output, log_path)
+
+            for path in (log_path, exit_path, log_path.with_suffix(".pid")):
+                path.unlink(missing_ok=True)
+
+            return f"exit code {code}, took {took}\n{output}"
+
+        tail = await self._tail(job, 20)
+
+        if len(await self.running()) >= self._max_running:
+            await self._sandbox.kill_group(job.pgid)
+            return (
+                f"timed out after {took}, process group killed because {self._max_running} "
+                f"jobs are already running\n{tail}"
+            )
+
+        adopted = await self._save(
+            job.model_copy(update={"id": self._next_id(), "name": command[:40]})
+        )
+        return (
+            f"still running after {took}, so it carries on in the background as {adopted.id}; "
+            f"job_wait waits for it and job_cancel stops it\n{tail}"
+        )
 
     async def wait(self, args: WaitJob) -> str:
         job = await self._refresh(self._get(args.job_id))
@@ -159,6 +204,36 @@ class JobTools:
             return now
 
         return job.log_path.stat().st_mtime if job.log_path.exists() else job.started_at
+
+    def _next_id(self) -> str:
+        return f"job-{len(self._jobs) + 1}"
+
+    async def _exit_code(self, job: Job, timeout_s: float) -> int | None:
+        try:
+            async with asyncio.timeout(timeout_s):
+                while True:
+                    code = self._sandbox.poll(job)
+
+                    if code is not None:
+                        return code
+
+                    await asyncio.sleep(self.RUN_POLL_S)
+        except TimeoutError:
+            return None
+
+    def _read_output(self, path: Path) -> str:
+        if not path.exists():
+            return ""
+
+        data = path.read_bytes()
+
+        if len(data) <= self.OUTPUT_BYTES:
+            return data.decode(errors="replace")
+
+        half = self.OUTPUT_BYTES // 2
+        head = data[:half].decode(errors="replace")
+        tail = data[-half:].decode(errors="replace")
+        return f"{head}\n[... {len(data) - 2 * half} bytes omitted ...]\n{tail}"
 
     def _get(self, job_id: str) -> Job:
         job = self._jobs.get(job_id)
