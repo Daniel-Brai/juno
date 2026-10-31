@@ -18,10 +18,10 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class TestDefaults:
-    def test_match_the_papers_best_configuration(self) -> None:
+    def test_use_medium_effort_on_opus(self) -> None:
         config = HarnessConfig()
 
-        assert config.model == ModelSettings(name="anthropic/claude-opus-5.5", effort="high")
+        assert config.model == ModelSettings(name="anthropic/claude-opus-5.5", effort="medium")
         assert config.budget.total == 86_400
         assert (
             config.flags.tools.system and config.flags.tools.jobs and config.flags.tools.submission

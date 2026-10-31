@@ -48,7 +48,7 @@ class TestAnthropicClient:
 
         assert params["model"] == "claude-opus-5-5"
         assert params["thinking"] == {"type": "adaptive"}
-        assert params["output_config"] == {"effort": "high"}
+        assert params["output_config"] == {"effort": "medium"}
         assert params["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
         assert params["fallbacks"] == "default"
         assert params["betas"] == ["server-side-fallback-2026-07-01"]
@@ -152,7 +152,7 @@ class TestOpenRouterTranslation:
         assert assistant["reasoning_details"] == [{"type": "reasoning.text", "text": "plan"}]
         assert tool == {"role": "tool", "tool_call_id": "call_1", "content": "data/"}
         assert payload["tools"][0]["function"]["parameters"] == {"type": "object"}
-        assert payload["reasoning"] == {"effort": "high"}
+        assert payload["reasoning"] == {"effort": "medium"}
         assert "cache_control" not in payload
 
     def test_anthropic_models_ask_for_caching(self) -> None:

@@ -153,7 +153,7 @@ class SearchTools:
         if shutil.which("git"):
             argv = ["git", "grep", "--no-index", "--exclude-standard", "-n", "-E"]
             argv += [f"-C{args.context}"] + (["-i"] if args.ignore_case else [])
-            argv += ["-e", args.pattern, "--", str(target)]
+            argv += ["-e", args.pattern, "--", self._workspace.relative(target)]
             argv += [f":(glob){args.glob}"] if args.glob else []
             return argv + [f":(exclude,glob)**/{name}/**" for name in skipped]
 

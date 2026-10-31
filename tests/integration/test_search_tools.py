@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -124,6 +125,17 @@ class TestGlob:
         assert SearchTools.generated(path) is generated
 
 
+@pytest.fixture(params=["ripgrep", "git"])
+def engine(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    which = shutil.which
+
+    if request.param == "git":
+        monkeypatch.setattr(
+            "juno.tools.search.shutil.which", lambda name: None if name == "rg" else which(name)
+        )
+
+
+@pytest.mark.usefixtures("engine")
 class TestGrep:
     async def test_shows_project_relative_matches(self, search: SearchTools) -> None:
         found = await search.grep(SearchText(pattern="greet\\(", path="src"))

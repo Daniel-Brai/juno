@@ -304,7 +304,7 @@ class TestArgumentCompletion:
             await pilot.pause()
             models = [match.text for match in menu.matches]
 
-        assert efforts == ["low", "medium", "high  current", "xhigh", "max"]
+        assert efforts == ["low", "medium  current", "high", "xhigh", "max"]
         assert models == ["/model scripted/two"]
 
 

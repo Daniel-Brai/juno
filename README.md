@@ -14,7 +14,7 @@ juno runs one long agent session against a goal. Use it as a coding agent in a p
 ## Install
 
 ```bash
-git clone <this repository> juno
+git clone https://github.com/Daniel-Brai/juno.git
 cd juno
 uv sync --all-extras
 ```
@@ -70,7 +70,7 @@ Settings come from `juno.toml` in the current folder, then `JUNO_` environment v
 [model]
 provider = "openrouter"
 name = "anthropic/claude-opus-5.5"
-effort = "high"
+effort = "medium"
 
 [budget]
 total = "6h"
